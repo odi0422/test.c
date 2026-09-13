@@ -1,0 +1,266 @@
+#include <stdio.h>
+#include <string.h>
+
+#define MAX_LEN 1000
+#define MAX_STACK MAX_LEN
+#define MAX_CHILDREN MAX_LEN
+
+typedef struct {
+    int totalNodes;
+    int leafNodes;
+    int nonLeafNodes;
+    int height;
+    int maxDegree;
+
+    int  foundC;
+    int  isCRoot;
+    char parentOfC;
+
+    char childrenOfC[MAX_CHILDREN];
+    int  childCountOfC;
+
+    char letters[MAX_LEN];
+    int  depths[MAX_LEN];
+    int  hasNextSibling[MAX_LEN];
+} TreeData;
+
+void printError(const char *msg);
+int  scanTree(const char *s, int len, TreeData *data);
+void printTree(const TreeData *data);
+void printResults(const TreeData *data);
+
+int main(void) {
+    char input[MAX_LEN];
+
+    printf("트리를 괄호 표기법으로 입력하세요: ");
+    if (fgets(input, sizeof(input), stdin) == NULL) {
+        printError("입력을 읽을 수 없습니다.");
+        return 1;
+    }
+
+    int len = (int)strlen(input);
+    while (len > 0 && (input[len - 1] == '\n' || input[len - 1] == '\r')) {
+        input[--len] = '\0';
+    }
+
+    if (len == 0) {
+        printError("입력이 비어 있습니다.");
+        return 1;
+    }
+    if (len >= MAX_LEN - 1) {
+        printError("입력 문자열이 너무 깁니다. (최대 길이를 초과)");
+        return 1;
+    }
+
+    TreeData data;
+    memset(&data, 0, sizeof(data));
+
+    if (!scanTree(input, len, &data)) {
+        return 1;
+    }
+
+    printResults(&data);
+
+    printf("\n[트리의 계층적 구조 출력]\n");
+    printTree(&data);
+
+    return 0;
+}
+
+void printError(const char *msg) {
+    printf("오류: %s\n", msg);
+}
+
+int scanTree(const char *s, int len, TreeData *data) {
+    char nodeStack[MAX_STACK];
+    int  counterStack[MAX_STACK];
+    int  indexStack[MAX_STACK];
+    int  nodeTop = -1;
+    int  counterTop = -1;
+
+    int  expectingNode    = 1;
+    int  expectAfterOpen  = 0;
+    int  expectAfterComma = 0;
+    char pendingNodeChar  = '\0';
+    int  pendingNodeIndex = -1;
+    int  currentDepth = 0;
+
+    int i = 0;
+    while (i < len) {
+        char c = s[i];
+
+        if (expectingNode) {
+            if (c < 'A' || c > 'Z') {
+                if (expectAfterOpen)
+                    printError("여는 괄호 뒤에 노드가 없습니다. 빈 괄호는 허용되지 않습니다. (예: A() 오류)");
+                else if (expectAfterComma)
+                    printError("쉼표 뒤에 노드가 와야 합니다. (쉼표 위치 오류 혹은 불필요한 쉼표)");
+                else
+                    printError("노드는 A~Z 대문자 알파벳 한 글자로 표현되어야 합니다.");
+                return 0;
+            }
+
+            int myIndex = data->totalNodes;
+            data->totalNodes++;
+
+            char parent = (nodeTop >= 0) ? nodeStack[nodeTop] : '\0';
+
+            if (c == 'C') {
+                data->foundC = 1;
+                if (parent == '\0') data->isCRoot = 1;
+                else                 data->parentOfC = parent;
+            }
+            if (parent == 'C') {
+                if (data->childCountOfC < MAX_CHILDREN) {
+                    data->childrenOfC[data->childCountOfC] = c;
+                }
+                data->childCountOfC++;
+            }
+            if (nodeTop >= 0) {
+                counterStack[counterTop]++;
+            }
+
+            int level = currentDepth + 1;
+            if (level > data->height) data->height = level;
+
+            data->letters[myIndex] = c;
+            data->depths[myIndex] = level;
+
+            if (i + 1 < len && s[i + 1] == '(') {
+                data->nonLeafNodes++;
+                pendingNodeChar = c;
+                pendingNodeIndex = myIndex;
+            } else {
+                data->leafNodes++;
+                data->hasNextSibling[myIndex] = (i + 1 < len && s[i + 1] == ',');
+                pendingNodeChar = '\0';
+                pendingNodeIndex = -1;
+            }
+
+            expectingNode   = 0;
+            expectAfterOpen = 0;
+            expectAfterComma = 0;
+            i++;
+            continue;
+        }
+        else {
+            if (c == '(') {
+                if (pendingNodeChar == '\0') {
+                    printError("괄호 '(' 의 위치가 올바르지 않습니다.");
+                    return 0;
+                }
+                if (nodeTop + 1 >= MAX_STACK) {
+                    printError("트리의 깊이가 너무 커서 스택 범위를 초과했습니다.");
+                    return 0;
+                }
+                nodeTop++;
+                nodeStack[nodeTop] = pendingNodeChar;
+                counterTop++;
+                counterStack[counterTop] = 0;
+                indexStack[nodeTop] = pendingNodeIndex;
+
+                currentDepth++;
+                pendingNodeChar = '\0';
+                pendingNodeIndex = -1;
+                expectingNode = 1;
+                expectAfterOpen = 1;
+                i++;
+                continue;
+            }
+            else if (c == ',') {
+                if (nodeTop < 0) {
+                    printError("최상위 레벨(트리 전체)에는 쉼표를 사용할 수 없습니다.");
+                    return 0;
+                }
+                expectingNode = 1;
+                expectAfterComma = 1;
+                i++;
+                continue;
+            }
+            else if (c == ')') {
+                if (nodeTop < 0) {
+                    printError("괄호 짝이 맞지 않습니다. (닫는 괄호가 더 많습니다)");
+                    return 0;
+                }
+                int degree = counterStack[counterTop];
+                if (degree > data->maxDegree) data->maxDegree = degree;
+
+                int closedIndex = indexStack[nodeTop];
+                data->hasNextSibling[closedIndex] = (i + 1 < len && s[i + 1] == ',');
+
+                nodeTop--;
+                counterTop--;
+                currentDepth--;
+                expectingNode = 0;
+                i++;
+                continue;
+            }
+            else {
+                printError("허용되지 않는 문자가 포함되어 있습니다. (A~Z, '(', ')', ',' 만 허용)");
+                return 0;
+            }
+        }
+    }
+
+    if (nodeTop != -1) {
+        printError("괄호 짝이 맞지 않습니다. (닫히지 않은 괄호가 있습니다)");
+        return 0;
+    }
+    if (expectingNode) {
+        printError("입력이 올바르게 끝나지 않았습니다. (노드가 더 필요합니다)");
+        return 0;
+    }
+
+    return 1;
+}
+
+void printResults(const TreeData *data) {
+    printf("\n[트리 분석 결과]\n");
+    printf("전체 노드의 수   : %d\n", data->totalNodes);
+    printf("단말 노드의 수   : %d\n", data->leafNodes);
+    printf("비단말 노드의 수 : %d\n", data->nonLeafNodes);
+    printf("트리의 높이      : %d\n", data->height);
+    printf("트리의 차수      : %d\n", data->maxDegree);
+
+    if (!data->foundC) {
+        printf("노드 C가 트리에 존재하지 않습니다.\n");
+        return;
+    }
+
+    if (data->isCRoot) {
+        printf("노드 C의 부모 노드 : 없음 (C는 루트 노드)\n");
+    } else {
+        printf("노드 C의 부모 노드 : %c\n", data->parentOfC);
+    }
+
+    if (data->childCountOfC == 0) {
+        printf("노드 C의 자식 노드 : 없음 (C는 단말 노드)\n");
+    } else {
+        printf("노드 C의 자식 노드 : ");
+        int n = data->childCountOfC;
+        if (n > MAX_CHILDREN) n = MAX_CHILDREN;
+        for (int k = 0; k < n; k++) {
+            printf("%c", data->childrenOfC[k]);
+            if (k < n - 1) printf(", ");
+        }
+        printf("\n");
+    }
+}
+
+void printTree(const TreeData *data) {
+    int prefixStack[MAX_STACK];
+    memset(prefixStack, 0, sizeof(prefixStack));
+
+    for (int idx = 0; idx < data->totalNodes; idx++) {
+        int depth = data->depths[idx] - 1;
+
+        for (int L = 1; L < depth; L++) {
+            if (prefixStack[L]) printf("|   ");
+            else                 printf("    ");
+        }
+        if (depth > 0) printf("+---");
+        printf("%c\n", data->letters[idx]);
+
+        prefixStack[depth] = data->hasNextSibling[idx];
+    }
+}

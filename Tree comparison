@@ -1,0 +1,837 @@
+/*
+ * 과제 3. 배열과 연결 자료구조 이진트리의 비교
+ *
+ * 하나의 프로그램에서 같은 괄호 표기법 입력으로
+ *   (1) 배열 이진트리 (인덱스 1부터, 왼쪽 2i, 오른쪽 2i+1)
+ *   (2) 포인터 연결 이진트리 (struct Node)
+ * 를 각각 만들어 다음을 비교한다.
+ *   - 메모리 사용량 (일반 / 완전 / 편향 이진트리, 노드 15개)
+ *   - 특정 노드의 부모 / 자식 / 형제 찾기와 탐색 비용
+ *
+ * 실행 순서
+ *   1. 이진트리 입력            2. 배열 기반 트리 생성
+ *   3. 연결 기반 트리 생성      4. 입력한 트리의 메모리 측정
+ *   5. 일반/완전/편향 메모리 비교
+ *   6. 찾을 노드 입력           7. 배열 구현 결과
+ *   8. 연결 구현 결과           9. 차이 분석
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define MAX_SIZE 1048576   /* 배열 최대 크기 (2^20) : 최대 20레벨까지 저장 가능 */
+#define MAX_LEN  1000      /* 입력 문자열 최대 길이 */
+#define SAMPLE_N 15        /* 비교에 사용할 노드 수 */
+
+/*
+ * 메모리 비교용 예제 트리 (모두 노드 15개, 이름 A~O)
+ * - 일반 이진트리 : 왼쪽/오른쪽 자식이 불규칙하게 섞여 있음
+ * - 완전 이진트리 : 노드 15개인 완전 이진트리는 A~O가 꽉 찬 트리가 된다.
+ *                   (과제 그림은 A~L 12개이지만 15개로 맞추기 위해 M~O를 추가)
+ * - 편향 이진트리 : 오른쪽으로만 이어지는 트리 (프로그램에서 문자열을 생성)
+ */
+#define SAMPLE_GENERAL  "A(B(C(D,E(,F)),G(H,)),I(,J(K(L,),M(,N(,O)))))"
+#define SAMPLE_COMPLETE "A(B(D(H,I),E(J,K)),C(F(L,M),G(N,O)))"
+
+/* ---------------------------------------------------------
+ * 자료구조 정의
+ * --------------------------------------------------------- */
+
+/* 연결 자료구조의 노드 */
+typedef struct Node {
+    char data;
+    struct Node *left;
+    struct Node *right;
+} Node;
+
+/* 배열 이진트리 : data[1] 이 루트, maxIndex 는 사용된 가장 큰 인덱스 */
+typedef struct {
+    char data[MAX_SIZE];
+    int maxIndex;
+} ArrayTree;
+
+/* 메모리 측정 결과 하나 */
+typedef struct {
+    const char *name;   /* 트리 종류 이름 */
+    int  nodeCount;     /* 노드 수 */
+    int  maxIndex;      /* 배열에서 사용된 가장 큰 인덱스 */
+    int  arraySize;     /* 배열 사용 크기(칸 수) = maxIndex + 1 (0번 칸 포함) */
+    long arrayBytes;    /* 배열 메모리 = 칸 수 x 원소 크기 */
+    long nodeSize;      /* sizeof(Node) */
+    long linkedBytes;   /* 연결 메모리 = 노드 수 x sizeof(Node) */
+} MemResult;
+
+ArrayTree workArray;    /* 예제 트리 측정에 재사용하는 배열 */
+ArrayTree userArray;    /* 사용자가 입력한 트리를 저장하는 배열 */
+
+/* 탐색 비용 기록용 전역 변수 */
+long stepCount = 0;            /* 방문/확인한 칸(노드) 수를 세는 카운터 */
+long arraySearchSteps = 0;     /* 배열에서 노드를 찾을 때 확인한 칸 수 */
+long linkedFindSteps = 0;      /* 연결에서 노드를 찾을 때 방문한 노드 수 */
+long linkedParentSteps = 0;    /* 연결에서 부모를 찾을 때 방문한 노드 수 */
+int  searchDone = 0;           /* 탐색을 실제로 수행했는가? */
+char searchTarget = 0;         /* 탐색한 노드 이름 */
+
+/* ---------------------------------------------------------
+ * 공통 보조 함수
+ * --------------------------------------------------------- */
+
+/* 문자열 끝의 개행 문자 제거 */
+void removeNewline(char *s)
+{
+    int len = strlen(s);
+    while (len > 0 && (s[len - 1] == '\n' || s[len - 1] == '\r')) {
+        s[len - 1] = '\0';
+        len--;
+    }
+}
+
+/* 문자열 속의 공백 제거 */
+void removeSpaces(char *s)
+{
+    int r, w = 0;
+    for (r = 0; s[r] != '\0'; r++) {
+        if (s[r] != ' ' && s[r] != '\t') {
+            s[w++] = s[r];
+        }
+    }
+    s[w] = '\0';
+}
+
+/* 영문 대문자인지 검사 */
+int isNodeChar(char c)
+{
+    return (c >= 'A' && c <= 'Z');
+}
+
+/* 같은 노드 이름이 두 번 이상 나오면 1 (두 구현의 탐색 결과를 같게 하려고 금지) */
+int hasDuplicate(const char *s)
+{
+    int seen[26] = {0};
+    int i;
+    for (i = 0; s[i] != '\0'; i++) {
+        if (isNodeChar(s[i])) {
+            if (seen[s[i] - 'A']) return 1;
+            seen[s[i] - 'A'] = 1;
+        }
+    }
+    return 0;
+}
+
+/* 오른쪽으로만 이어지는 편향 이진트리 문자열 만들기 (예: n=3 -> "A(,B(,C))") */
+void makeSkewedString(char *buf, int n)
+{
+    int i, len = 0;
+    for (i = 0; i < n; i++) {
+        buf[len++] = 'A' + i;
+        if (i < n - 1) {
+            buf[len++] = '(';
+            buf[len++] = ',';
+        }
+    }
+    for (i = 0; i < n - 1; i++) {
+        buf[len++] = ')';
+    }
+    buf[len] = '\0';
+}
+
+/* =========================================================
+ *  Part A. 배열 이진트리
+ * ========================================================= */
+
+/* 배열을 비운다 (사용했던 부분만 0으로) */
+void clearArray(ArrayTree *t)
+{
+    memset(t->data, 0, t->maxIndex + 1);
+    t->maxIndex = 0;
+}
+
+/*
+ * 괄호 표기법 파싱 (재귀) : 노드를 index 위치에 저장한다.
+ * 왼쪽 자식은 2*index, 오른쪽 자식은 2*index+1 에 저장하므로
+ * 쉼표 앞이 비어 있어도 오른쪽 자식의 위치가 유지된다.
+ * 성공하면 1, 오류면 0 을 반환한다.
+ */
+int parseArrayNode(const char *str, int *pos, int index, ArrayTree *t)
+{
+    int hasLeftChild = 0, hasRightChild = 0;
+
+    if (index >= MAX_SIZE) {
+        printf("오류: 트리가 너무 깊어 배열에 저장할 수 없습니다.\n");
+        return 0;
+    }
+    if (!isNodeChar(str[*pos])) {
+        printf("오류: 노드 이름(영문 대문자)이 필요합니다. (위치 %d)\n", *pos + 1);
+        return 0;
+    }
+
+    t->data[index] = str[*pos];
+    if (index > t->maxIndex) t->maxIndex = index;
+    (*pos)++;
+
+    if (str[*pos] != '(') return 1;    /* 단말 노드 */
+    (*pos)++;
+
+    if (isNodeChar(str[*pos])) {       /* 왼쪽 자식 */
+        hasLeftChild = 1;
+        if (!parseArrayNode(str, pos, 2 * index, t)) return 0;
+    }
+    if (str[*pos] != ',') {
+        printf("오류: ',' 가 필요합니다. (위치 %d)\n", *pos + 1);
+        return 0;
+    }
+    (*pos)++;
+
+    if (isNodeChar(str[*pos])) {       /* 오른쪽 자식 */
+        hasRightChild = 1;
+        if (!parseArrayNode(str, pos, 2 * index + 1, t)) return 0;
+    }
+    if (str[*pos] != ')') {
+        printf("오류: ')' 가 필요합니다. (위치 %d)\n", *pos + 1);
+        return 0;
+    }
+    (*pos)++;
+
+    if (!hasLeftChild && !hasRightChild) {
+        printf("오류: 괄호 안에 자식이 하나도 없습니다.\n");
+        return 0;
+    }
+    return 1;
+}
+
+/* 문자열로 배열 트리를 만든다. 성공 1, 실패 0 */
+int buildArrayTree(const char *str, ArrayTree *t)
+{
+    int pos = 0;
+    int ok;
+
+    clearArray(t);
+    ok = parseArrayNode(str, &pos, 1, t);
+    if (ok && str[pos] != '\0') {
+        printf("오류: 입력 끝에 잘못된 문자가 있습니다. (위치 %d)\n", pos + 1);
+        ok = 0;
+    }
+    return ok;
+}
+
+/* i번 칸에 노드가 있는가? (범위를 벗어나면 없는 것으로 처리) */
+int arrayHas(ArrayTree *t, int i)
+{
+    return (i >= 1 && i < MAX_SIZE && t->data[i] != 0);
+}
+
+/* 왼쪽으로 눕힌 형태로 출력 (오른쪽 -> 자신 -> 왼쪽) */
+void printArrayTree(ArrayTree *t, int i, int level)
+{
+    int k;
+    if (!arrayHas(t, i)) return;
+
+    printArrayTree(t, 2 * i + 1, level + 1);
+    for (k = 0; k < level; k++) printf("    ");
+    printf("%c\n", t->data[i]);
+    printArrayTree(t, 2 * i, level + 1);
+}
+
+/* 배열의 내용을 [인덱스]값 형태로 출력 ('-' 는 빈 칸) */
+void printArrayContents(ArrayTree *t)
+{
+    int i;
+
+    if (t->maxIndex > 40) {
+        printf("배열 내용: (최대 인덱스가 %d 로 너무 길어 생략)\n", t->maxIndex);
+        return;
+    }
+    printf("배열 내용: ");
+    for (i = 1; i <= t->maxIndex; i++) {
+        if (t->data[i] == 0) printf("[%d]- ", i);
+        else                 printf("[%d]%c ", i, t->data[i]);
+    }
+    printf("\n");
+}
+
+/* 이름으로 노드의 인덱스를 찾는다. 배열을 1번부터 차례로 확인한다. (없으면 0) */
+int findIndex(ArrayTree *t, char target)
+{
+    int i;
+    for (i = 1; i <= t->maxIndex; i++) {
+        stepCount++;                     /* 확인한 칸 수 */
+        if (t->data[i] == target) return i;
+    }
+    return 0;
+}
+
+/* 배열 구현: 부모 / 자식 / 형제 출력 */
+void showRelationArray(ArrayTree *t, char target)
+{
+    int i, sibling;
+
+    printf("========== 배열 구현 ==========\n\n");
+    printf("찾는 노드: %c\n", target);
+
+    stepCount = 0;
+    i = findIndex(t, target);
+    arraySearchSteps = stepCount;
+
+    if (i == 0) {
+        printf("트리에 없는 노드입니다.\n");
+        return;
+    }
+    printf("(배열 인덱스: %d)\n", i);
+
+    /* 부모 = i / 2 (루트는 부모 없음) */
+    if (i == 1) printf("부모 노드: 없음\n");
+    else        printf("부모 노드: %c\n", t->data[i / 2]);
+
+    /* 자식 = 2i, 2i+1 (그 칸에 노드가 있는지 확인) */
+    if (arrayHas(t, 2 * i)) printf("왼쪽 자식: %c\n", t->data[2 * i]);
+    else                    printf("왼쪽 자식: 없음\n");
+    if (arrayHas(t, 2 * i + 1)) printf("오른쪽 자식: %c\n", t->data[2 * i + 1]);
+    else                        printf("오른쪽 자식: 없음\n");
+
+    /* 형제 : i 가 짝수면 i+1, 홀수면 i-1 (루트는 형제 없음) */
+    if (i == 1) {
+        printf("형제 노드: 없음\n");
+    } else {
+        sibling = (i % 2 == 0) ? i + 1 : i - 1;
+        if (arrayHas(t, sibling)) printf("형제 노드: %c\n", t->data[sibling]);
+        else                      printf("형제 노드: 없음\n");
+    }
+
+    printf("[탐색 비용] 이름으로 인덱스를 찾는 데 확인한 배열 칸: %ld개\n", arraySearchSteps);
+    printf("            부모/자식/형제는 인덱스 계산(i/2, 2i, 2i+1)만으로 확인\n");
+}
+
+/* =========================================================
+ *  Part B. 연결 자료구조 이진트리
+ * ========================================================= */
+
+/* 노드 생성 */
+Node *createNode(char data)
+{
+    Node *node = (Node *)malloc(sizeof(Node));
+    if (node == NULL) {
+        printf("메모리 할당에 실패했습니다.\n");
+        exit(1);
+    }
+    node->data = data;
+    node->left = NULL;
+    node->right = NULL;
+    return node;
+}
+
+/* 후위 순회로 모든 노드 해제 */
+void freeTree(Node *root)
+{
+    if (root == NULL) return;
+    freeTree(root->left);
+    freeTree(root->right);
+    free(root);
+}
+
+/*
+ * 괄호 표기법 파싱 (재귀) : 노드를 malloc 으로 만들어 left/right 로 연결
+ * 쉼표 앞이 비면 left = NULL, 쉼표 뒤가 비면 right = NULL
+ */
+Node *parseLinkedNode(const char *str, int *pos, int *error)
+{
+    Node *node;
+
+    if (!isNodeChar(str[*pos])) {
+        printf("오류: 노드 이름(영문 대문자)이 필요합니다. (위치 %d)\n", *pos + 1);
+        *error = 1;
+        return NULL;
+    }
+    node = createNode(str[*pos]);
+    (*pos)++;
+
+    if (str[*pos] != '(') return node;   /* 단말 노드 */
+    (*pos)++;
+
+    if (isNodeChar(str[*pos])) {
+        node->left = parseLinkedNode(str, pos, error);
+        if (*error) return node;
+    }
+    if (str[*pos] != ',') {
+        printf("오류: ',' 가 필요합니다. (위치 %d)\n", *pos + 1);
+        *error = 1;
+        return node;
+    }
+    (*pos)++;
+
+    if (isNodeChar(str[*pos])) {
+        node->right = parseLinkedNode(str, pos, error);
+        if (*error) return node;
+    }
+    if (str[*pos] != ')') {
+        printf("오류: ')' 가 필요합니다. (위치 %d)\n", *pos + 1);
+        *error = 1;
+        return node;
+    }
+    (*pos)++;
+
+    if (node->left == NULL && node->right == NULL) {
+        printf("오류: 괄호 안에 자식이 하나도 없습니다.\n");
+        *error = 1;
+    }
+    return node;
+}
+
+/* 문자열로 연결 트리를 만든다. 실패하면 *ok = 0, 반환값 NULL */
+Node *buildLinkedTree(const char *str, int *ok)
+{
+    int pos = 0, error = 0;
+    Node *root = parseLinkedNode(str, &pos, &error);
+
+    if (!error && str[pos] != '\0') {
+        printf("오류: 입력 끝에 잘못된 문자가 있습니다. (위치 %d)\n", pos + 1);
+        error = 1;
+    }
+    if (error) {
+        freeTree(root);    /* 만들다 만 트리 해제 */
+        root = NULL;
+    }
+    *ok = !error;
+    return root;
+}
+
+/* 왼쪽으로 눕힌 형태로 출력 */
+void printLinkedTree(Node *node, int level)
+{
+    int k;
+    if (node == NULL) return;
+
+    printLinkedTree(node->right, level + 1);
+    for (k = 0; k < level; k++) printf("    ");
+    printf("%c\n", node->data);
+    printLinkedTree(node->left, level + 1);
+}
+
+/* 전체 노드 수 */
+int countNodes(Node *node)
+{
+    if (node == NULL) return 0;
+    return 1 + countNodes(node->left) + countNodes(node->right);
+}
+
+/* 이름으로 노드 찾기 (전위 순회). 방문한 노드 수를 stepCount 에 센다. */
+Node *findNode(Node *root, char target)
+{
+    Node *found;
+
+    if (root == NULL) return NULL;
+    stepCount++;
+    if (root->data == target) return root;
+
+    found = findNode(root->left, target);
+    if (found != NULL) return found;
+    return findNode(root->right, target);
+}
+
+/*
+ * 부모 찾기 : 부모 포인터가 없으므로 루트부터 탐색하면서
+ * target 을 left 또는 right 로 가진 노드를 찾는다.
+ */
+Node *findParent(Node *root, char target)
+{
+    Node *found;
+
+    if (root == NULL) return NULL;
+    stepCount++;
+
+    if ((root->left != NULL && root->left->data == target) ||
+        (root->right != NULL && root->right->data == target)) {
+        return root;
+    }
+
+    found = findParent(root->left, target);
+    if (found != NULL) return found;
+    return findParent(root->right, target);
+}
+
+/* 연결 구현: 부모 / 자식 / 형제 출력 */
+void showRelationLinked(Node *root, char target)
+{
+    Node *node, *parent, *sibling;
+
+    printf("========== 연결 자료구조 구현 ==========\n\n");
+    printf("찾는 노드: %c\n", target);
+
+    stepCount = 0;
+    node = findNode(root, target);
+    linkedFindSteps = stepCount;
+    linkedParentSteps = 0;
+
+    if (node == NULL) {
+        printf("트리에 없는 노드입니다.\n");
+        return;
+    }
+
+    /* 부모 : 루트가 아니면 루트부터 탐색해서 찾는다. */
+    parent = NULL;
+    if (node != root) {
+        stepCount = 0;
+        parent = findParent(root, target);
+        linkedParentSteps = stepCount;
+    }
+
+    if (parent == NULL) printf("부모 노드: 없음\n");
+    else                printf("부모 노드: %c\n", parent->data);
+
+    /* 자식 : 노드의 left, right 포인터를 바로 확인 */
+    if (node->left != NULL) printf("왼쪽 자식: %c\n", node->left->data);
+    else                    printf("왼쪽 자식: 없음\n");
+    if (node->right != NULL) printf("오른쪽 자식: %c\n", node->right->data);
+    else                     printf("오른쪽 자식: 없음\n");
+
+    /* 형제 : 부모의 다른 쪽 자식 */
+    sibling = NULL;
+    if (parent != NULL) {
+        if (parent->left == node) sibling = parent->right;
+        else                      sibling = parent->left;
+    }
+    if (sibling == NULL) printf("형제 노드: 없음\n");
+    else                 printf("형제 노드: %c\n", sibling->data);
+
+    printf("[탐색 비용] 노드를 찾는 데 방문한 노드: %ld개\n", linkedFindSteps);
+    printf("            부모를 찾는 데 루트부터 방문한 노드: %ld개\n", linkedParentSteps);
+    printf("            자식은 left/right 포인터로 바로 확인\n");
+
+    searchDone = 1;
+    searchTarget = target;
+}
+
+/* =========================================================
+ *  Part C. 메모리 사용량 측정과 출력
+ * ========================================================= */
+
+/* 이미 만들어진 배열 트리와 연결 트리로 측정 결과를 채운다. */
+void fillResult(MemResult *r, const char *name, ArrayTree *a, Node *root)
+{
+    r->name = name;
+    r->nodeCount = countNodes(root);
+    r->maxIndex = a->maxIndex;
+    r->arraySize = a->maxIndex + 1;                       /* 0번 칸 포함 */
+    r->arrayBytes = (long)r->arraySize * (long)sizeof(a->data[0]);
+    r->nodeSize = (long)sizeof(Node);
+    r->linkedBytes = (long)r->nodeCount * r->nodeSize;
+}
+
+/* 문자열로 두 구현을 모두 만들어 측정한 뒤 연결 트리는 해제한다. */
+int measureTree(const char *name, const char *str, MemResult *r)
+{
+    Node *root;
+    int ok;
+
+    if (!buildArrayTree(str, &workArray)) return 0;
+    root = buildLinkedTree(str, &ok);
+    if (!ok) return 0;
+
+    fillResult(r, name, &workArray, root);
+    freeTree(root);
+    return 1;
+}
+
+/* 측정 결과 하나를 과제 형식으로 출력 */
+void printMemoryDetail(MemResult *r)
+{
+    int emptySlots = r->maxIndex - r->nodeCount;         /* 1번~maxIndex 중 빈 칸 */
+    double usage = 100.0 * r->nodeCount / r->maxIndex;
+
+    printf("\n[메모리 사용량]\n\n");
+    printf("트리 종류: %s\n", r->name);
+    printf("노드 수: %d\n\n", r->nodeCount);
+
+    printf("배열 구현:\n");
+    printf("배열 사용 크기: %d칸 (최대 인덱스 %d + 사용하지 않는 0번 칸)\n",
+           r->arraySize, r->maxIndex);
+    printf("배열 메모리: %ld bytes\n", r->arrayBytes);
+    printf("빈 칸 수: %d칸, 칸 사용률: %.2f%%\n\n", emptySlots, usage);
+
+    printf("연결 자료구조:\n");
+    printf("노드 하나의 크기: %ld bytes\n", r->nodeSize);
+    printf("전체 노드 메모리: %ld bytes\n", r->linkedBytes);
+}
+
+/* 화면에서 차지하는 폭 계산 (ASCII = 1칸, 한글 = 2칸) */
+int displayWidth(const char *s)
+{
+    int width = 0, i;
+    for (i = 0; s[i] != '\0'; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x80) width += 1;                 /* 영문, 숫자, 기호 */
+        else if ((c & 0xC0) != 0x80) width += 2;  /* UTF-8 한글의 첫 바이트 */
+    }
+    return width;
+}
+
+/* 표의 칸 하나 출력 : "| 내용    " (폭에 맞춰 공백 채움) */
+void printCell(const char *text, int width)
+{
+    int k;
+    printf("| %s", text);
+    for (k = displayWidth(text); k < width; k++) putchar(' ');
+    putchar(' ');
+}
+
+/* 표의 가로선 출력 */
+void printBorder(const int *widths, int cols)
+{
+    int c, k;
+    for (c = 0; c < cols; c++) {
+        putchar('+');
+        for (k = 0; k < widths[c] + 2; k++) putchar('-');
+    }
+    printf("+\n");
+}
+
+/* 측정 결과 여러 개를 표로 출력 */
+void printTable(MemResult *list, int count)
+{
+    int widths[6] = {14, 7, 11, 11, 11, 9};
+    const char *headers[6] = {"트리 종류", "노드 수", "최대 인덱스",
+                              "배열(bytes)", "연결(bytes)", "배열/연결"};
+    char buf[6][40];
+    int i, c;
+
+    printBorder(widths, 6);
+    for (c = 0; c < 6; c++) printCell(headers[c], widths[c]);
+    printf("|\n");
+    printBorder(widths, 6);
+
+    for (i = 0; i < count; i++) {
+        snprintf(buf[0], sizeof(buf[0]), "%s", list[i].name);
+        snprintf(buf[1], sizeof(buf[1]), "%d", list[i].nodeCount);
+        snprintf(buf[2], sizeof(buf[2]), "%d", list[i].maxIndex);
+        snprintf(buf[3], sizeof(buf[3]), "%ld", list[i].arrayBytes);
+        snprintf(buf[4], sizeof(buf[4]), "%ld", list[i].linkedBytes);
+        snprintf(buf[5], sizeof(buf[5]), "%.2f",
+                 (double)list[i].arrayBytes / (double)list[i].linkedBytes);
+        for (c = 0; c < 6; c++) printCell(buf[c], widths[c]);
+        printf("|\n");
+    }
+    printBorder(widths, 6);
+}
+
+/* =========================================================
+ *  Part D. 분석 출력 (측정한 값을 넣어서 설명)
+ * ========================================================= */
+
+/* 시간 복잡도 비교표 출력 */
+void printComplexityTable(void)
+{
+    int widths[3] = {24, 28, 29};
+    const char *rows[5][3] = {
+        {"작업",                     "배열",                        "연결"},
+        {"이름으로 노드 찾기",       "O(M) 완전 O(n), 편향 O(2^n)", "O(n)"},
+        {"자식 확인(위치를 알 때)",  "O(1)",                        "O(1)"},
+        {"부모 확인(위치를 알 때)",  "O(1)",                        "O(n) 부모 포인터 있으면 O(1)"},
+        {"형제 확인(위치를 알 때)",  "O(1)",                        "O(n) 부모를 먼저 찾아야 함"}
+    };
+    int r, c;
+
+    printf("   "); printBorder(widths, 3);
+    for (r = 0; r < 5; r++) {
+        printf("   ");
+        for (c = 0; c < 3; c++) printCell(rows[r][c], widths[c]);
+        printf("|\n");
+        if (r == 0) { printf("   "); printBorder(widths, 3); }
+    }
+    printf("   "); printBorder(widths, 3);
+}
+
+/* 두 값 중 더 작은 쪽 이름 */
+const char *smallerName(long arrayBytes, long linkedBytes)
+{
+    return (arrayBytes <= linkedBytes) ? "배열" : "연결 자료구조";
+}
+
+void printAnalysis(MemResult *g, MemResult *c, MemResult *s, MemResult *growth)
+{
+    MemResult *small = &growth[0];   /* 편향 노드 5개 */
+    MemResult *big   = &growth[3];   /* 편향 노드 20개 */
+
+    printf("\n========== 두 구현의 차이 분석 ==========\n");
+
+    printf("\n1. 일반 이진트리 (노드 %d개)\n", g->nodeCount);
+    printf("   배열은 최대 인덱스 %d 까지 %d칸(%ld bytes)이 필요하고, 빈 칸이 %d개라서\n",
+           g->maxIndex, g->arraySize, g->arrayBytes, g->maxIndex - g->nodeCount);
+    printf("   칸 사용률은 %.1f%% 이다. 연결 자료구조는 %d x %ld = %ld bytes 이다.\n",
+           100.0 * g->nodeCount / g->maxIndex, g->nodeCount, g->nodeSize, g->linkedBytes);
+    printf("   이 트리에서는 %s 쪽이 메모리를 더 적게 쓴다. 빈 칸이 많아도 배열의 한 칸은\n",
+           smallerName(g->arrayBytes, g->linkedBytes));
+    printf("   %d byte 인데 연결 노드는 %ld bytes(포인터 2개 + 패딩)이기 때문이다.\n",
+           (int)sizeof(workArray.data[0]), g->nodeSize);
+    printf("   배열이 손해가 되려면 배열 칸 수가 (노드 수 x %ld) = %ld칸을 넘어야 한다.\n",
+           g->nodeSize, g->linkedBytes);
+
+    printf("\n2. 완전 이진트리 (노드 %d개)\n", c->nodeCount);
+    printf("   최대 인덱스가 %d 이고 노드 수도 %d 이므로 빈 칸은 %d개이다.\n",
+           c->maxIndex, c->nodeCount, c->maxIndex - c->nodeCount);
+    printf("   완전 이진트리는 위에서 아래, 왼쪽에서 오른쪽으로 빈틈없이 채워지므로\n");
+    printf("   1번부터 n번 칸을 그대로 사용하고, 부모-자식 관계는 2i, 2i+1 계산으로\n");
+    printf("   표현되어 포인터를 저장할 필요가 없다. 그래서 배열 %ld bytes,\n", c->arrayBytes);
+    printf("   연결 %ld bytes 로 배열이 약 %.1f배 적게 쓴다.\n",
+           c->linkedBytes, (double)c->linkedBytes / (double)c->arrayBytes);
+
+    printf("\n3. 편향 이진트리 (노드 %d개)\n", s->nodeCount);
+    printf("   오른쪽 자식은 2i+1 이므로 인덱스가 1 -> 3 -> 7 -> 15 -> ... 처럼\n");
+    printf("   2^k - 1 로 늘어난다. 노드는 %d개뿐인데 최대 인덱스가 %d 이므로\n",
+           s->nodeCount, s->maxIndex);
+    printf("   배열은 %ld bytes 가 필요하고 빈 칸이 %d개(칸 사용률 %.3f%%)이다.\n",
+           s->arrayBytes, s->maxIndex - s->nodeCount, 100.0 * s->nodeCount / s->maxIndex);
+    printf("   같은 트리를 연결로 만들면 %ld bytes 이다. 노드 수를 늘려 보면\n", s->linkedBytes);
+    printf("   노드 %d개: 배열 %ld / 연결 %ld bytes,\n",
+           small->nodeCount, small->arrayBytes, small->linkedBytes);
+    printf("   노드 %d개: 배열 %ld / 연결 %ld bytes 로, 노드가 하나 늘 때마다\n",
+           big->nodeCount, big->arrayBytes, big->linkedBytes);
+    printf("   높이가 1 커지고 필요한 칸이 약 2배가 되어 배열은 지수적으로 커진다.\n");
+    printf("   (노드가 적을 때는 배열이 더 작지만, 노드 수가 늘면 곧 역전된다.)\n");
+
+    printf("\n4. 연결 자료구조는 왜 노드 수에 비례하는가\n");
+    printf("   노드를 만들 때마다 malloc 으로 sizeof(Node) = %ld bytes 만 할당하고,\n", g->nodeSize);
+    printf("   없는 자식은 NULL 포인터 값 하나로 나타내므로 빈 자리를 따로 잡지 않는다.\n");
+    printf("   그래서 일반/완전/편향 트리 모두 %d x %ld = %ld bytes 로 같다.\n",
+           g->nodeCount, g->nodeSize, g->linkedBytes);
+    printf("   (모양과 상관없이 노드 수에만 비례. 단, malloc 관리 정보는 측정에 넣지 않았다.)\n");
+
+    printf("\n5. 배열에서 부모/자식/형제 찾기\n");
+    printf("   이름으로 배열을 훑어 인덱스 i 를 얻은 뒤,\n");
+    printf("   부모 = i/2, 왼쪽 자식 = 2i, 오른쪽 자식 = 2i+1,\n");
+    printf("   형제 = (i가 짝수면 i+1, 홀수면 i-1) 을 계산하고 그 칸에 노드가 있는지 확인한다.\n");
+
+    printf("\n6. 연결 자료구조에서 부모/자식/형제 찾기\n");
+    printf("   자식은 node->left, node->right 를 바로 본다.\n");
+    printf("   부모 포인터가 없으므로 루트부터 탐색하여 target 을 left/right 로 가진 노드를\n");
+    printf("   찾고(findParent), 형제는 그 부모의 다른 쪽 자식으로 구한다.\n");
+
+    printf("\n7. 시간 복잡도 (n = 노드 수, M = 배열의 최대 인덱스)\n");
+    printComplexityTable();
+
+    printf("\n8. 측정 결과로 본 특징\n");
+    if (searchDone) {
+        printf("   방금 노드 %c 를 찾을 때 배열은 %ld칸을 확인했고, 연결은 노드를 찾는 데 %ld개,\n",
+               searchTarget, arraySearchSteps, linkedFindSteps);
+        printf("   부모를 찾는 데 %ld개를 방문했다. 위치를 알고 난 뒤 관계 계산은 배열이 O(1)이지만,\n",
+               linkedParentSteps);
+        printf("   이름 탐색 자체는 배열이 (빈 칸까지 포함한) 최대 인덱스에 비례한다.\n");
+    }
+    printf("   - 완전 이진트리처럼 빈틈이 없으면 배열이 메모리도 적고 관계 계산도 빠르다.\n");
+    printf("   - 편향/희소한 트리는 배열의 빈 칸이 지수적으로 늘어 연결이 훨씬 유리하다.\n");
+    printf("   - 일반 트리는 '빈 칸 수'와 '원소 크기 차이(1 byte vs %ld bytes)'의 균형으로 결정된다.\n",
+           g->nodeSize);
+
+    printf("\n[결론] 어느 한쪽이 항상 좋은 것은 아니다.\n");
+    printf("   * 트리 모양: 완전/포화에 가까우면 배열, 깊이에 비해 노드가 적으면(편향/희소) 연결.\n");
+    printf("   * 작업: 인덱스로 부모/자식/형제를 자주 보면 배열(힙 등),\n");
+    printf("           노드 삽입/삭제로 모양이 자주 바뀌면 연결(배열은 서브트리 전체를 옮겨야 함),\n");
+    printf("           부모/형제 탐색이 잦은 연결 구조는 부모 포인터를 추가해야 하며 메모리가 더 든다.\n");
+}
+
+/* =========================================================
+ *  main
+ * ========================================================= */
+int main(void)
+{
+    char input[MAX_LEN];
+    char targetLine[MAX_LEN];
+    char skewed[100];
+    char growthNames[4][20];
+    int growthN[4] = {5, 10, 15, 20};
+    Node *root;
+    int ok, i;
+    MemResult userRes, results[3], growth[4];
+
+    /* 1. 이진트리 입력 */
+    printf("이진트리를 괄호 표기법으로 입력하세요 (예: A(B,C(D,E))): ");
+    if (fgets(input, MAX_LEN, stdin) == NULL) {
+        printf("입력 오류\n");
+        return 1;
+    }
+    removeNewline(input);
+    removeSpaces(input);
+
+    if (hasDuplicate(input)) {
+        printf("오류: 같은 노드 이름이 두 번 이상 사용되었습니다.\n");
+        printf("올바르지 않은 입력입니다.\n");
+        return 1;
+    }
+
+    /* 2. 배열 기반 이진트리 생성 */
+    if (!buildArrayTree(input, &userArray)) {
+        printf("올바르지 않은 입력입니다.\n");
+        return 1;
+    }
+    printf("\n[배열 기반 이진트리]\n");
+    printArrayContents(&userArray);
+    printArrayTree(&userArray, 1, 0);
+
+    /* 3. 연결 자료구조 기반 이진트리 생성 */
+    root = buildLinkedTree(input, &ok);
+    if (!ok) {
+        printf("올바르지 않은 입력입니다.\n");
+        return 1;
+    }
+    printf("\n[연결 자료구조 기반 이진트리]\n");
+    printLinkedTree(root, 0);
+
+    /* 4. 입력한 트리의 메모리 사용량 */
+    fillResult(&userRes, "입력한 트리", &userArray, root);
+    printMemoryDetail(&userRes);
+
+    /* 5. 일반 / 완전 / 편향 이진트리 메모리 비교 (모두 노드 15개) */
+    makeSkewedString(skewed, SAMPLE_N);
+    if (!measureTree("일반 이진트리", SAMPLE_GENERAL, &results[0]) ||
+        !measureTree("완전 이진트리", SAMPLE_COMPLETE, &results[1]) ||
+        !measureTree("편향 이진트리", skewed, &results[2])) {
+        printf("예제 트리 생성에 실패했습니다.\n");
+        freeTree(root);
+        return 1;
+    }
+
+    printf("\n==================================================\n");
+    printf(" 일반 / 완전 / 편향 이진트리 메모리 비교 (노드 %d개)\n", SAMPLE_N);
+    printf("==================================================\n");
+    for (i = 0; i < 3; i++) {
+        printMemoryDetail(&results[i]);
+    }
+
+    printf("\n[메모리 비교표]  (배열/연결 < 1 이면 배열이 더 작음)\n");
+    printTable(results, 3);
+
+    /* 편향 트리에서 노드 수에 따른 변화 */
+    for (i = 0; i < 4; i++) {
+        makeSkewedString(skewed, growthN[i]);
+        snprintf(growthNames[i], sizeof(growthNames[i]), "편향(n=%d)", growthN[i]);
+        if (!measureTree(growthNames[i], skewed, &growth[i])) {
+            printf("편향 트리 생성에 실패했습니다.\n");
+            freeTree(root);
+            return 1;
+        }
+    }
+    printf("\n[편향 이진트리: 노드 수에 따른 메모리 변화]\n");
+    printTable(growth, 4);
+
+    /* 6. 찾을 노드 입력 */
+    printf("\n찾을 노드를 입력하세요 (영문 대문자 한 글자): ");
+    targetLine[0] = '\0';
+    if (fgets(targetLine, MAX_LEN, stdin) != NULL) {
+        removeNewline(targetLine);
+        removeSpaces(targetLine);
+    }
+
+    if (strlen(targetLine) == 1 && isNodeChar(targetLine[0])) {
+        printf("\n");
+        showRelationArray(&userArray, targetLine[0]);   /* 7. 배열 구현 */
+        printf("\n\n");
+        showRelationLinked(root, targetLine[0]);        /* 8. 연결 구현 */
+    } else {
+        printf("\n노드 이름은 영문 대문자 한 글자여야 합니다. 노드 탐색은 건너뜁니다.\n");
+    }
+
+    /* 9. 두 구현의 차이 분석 */
+    printAnalysis(&results[0], &results[1], &results[2], growth);
+
+    freeTree(root);
+    return 0;
+}

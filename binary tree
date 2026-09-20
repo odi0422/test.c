@@ -1,0 +1,378 @@
+/*
+ * 과제: 포인터를 이용한 연결 자료구조로 이진트리 구현
+ *
+ * - 괄호 표기법 문자열을 읽어 Node를 malloc()으로 만들고
+ *   left / right 포인터로 연결한다.
+ * - 왼쪽으로 눕힌 트리 출력, 트리 정보 계산, 형태 판별(완전/포화/편향)
+ * - 프로그램 종료 전에 후위 순회로 모든 노드를 free() 한다.
+ *
+ * 입력 형식 예)  A   A(B,C)   A(B,)   A(,B)   A(B(,D),C)   A(B,C(D,E))
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define MAX_LEN 1000   /* 입력 문자열 최대 길이 */
+
+/* 이진트리의 노드 */
+typedef struct Node {
+    char data;              /* 노드 이름 (영문 대문자) */
+    struct Node *left;      /* 왼쪽 자식 */
+    struct Node *right;     /* 오른쪽 자식 */
+} Node;
+
+/* ---------------------------------------------------------
+ * 노드 생성 / 메모리 해제
+ * --------------------------------------------------------- */
+
+/* 새 노드를 만들어 주소를 반환한다. */
+Node *createNode(char data)
+{
+    Node *node = (Node *)malloc(sizeof(Node));
+    if (node == NULL) {
+        printf("메모리 할당에 실패했습니다.\n");
+        exit(1);
+    }
+    node->data = data;
+    node->left = NULL;
+    node->right = NULL;
+    return node;
+}
+
+/* 후위 순회(왼쪽 -> 오른쪽 -> 자기 자신)로 모든 노드를 free 한다. */
+void freeTree(Node *root)
+{
+    if (root == NULL) return;
+    freeTree(root->left);
+    freeTree(root->right);
+    free(root);
+}
+
+/* ---------------------------------------------------------
+ * 입력 문자열 처리
+ * --------------------------------------------------------- */
+
+/* 문자열 끝의 개행 문자를 제거한다. */
+void removeNewline(char *s)
+{
+    int len = strlen(s);
+    while (len > 0 && (s[len - 1] == '\n' || s[len - 1] == '\r')) {
+        s[len - 1] = '\0';
+        len--;
+    }
+}
+
+/* 문자열 속의 공백(스페이스, 탭)을 제거한다. */
+void removeSpaces(char *s)
+{
+    int r, w = 0;
+    for (r = 0; s[r] != '\0'; r++) {
+        if (s[r] != ' ' && s[r] != '\t') {
+            s[w++] = s[r];
+        }
+    }
+    s[w] = '\0';
+}
+
+/* 영문 대문자인지 검사 */
+int isNodeChar(char c)
+{
+    return (c >= 'A' && c <= 'Z');
+}
+
+/* ---------------------------------------------------------
+ * 괄호 표기법 파싱 (재귀)
+ *
+ * 문법:  트리 ::= 대문자 [ '(' [트리] ',' [트리] ')' ]
+ *
+ * str    : 입력 문자열
+ * index  : 현재 읽고 있는 위치 (호출 후 다음 위치로 이동해 있음)
+ * error  : 오류가 생기면 1로 바꿔 준다.
+ *
+ * 쉼표 앞이 비어 있으면 left = NULL,
+ * 쉼표 뒤가 비어 있으면 right = NULL 이 된다.
+ * (빈 자리를 무시하지 않으므로 A(B,) 와 A(,B) 가 구분된다.)
+ * --------------------------------------------------------- */
+Node *parseTree(char *str, int *index, int *error)
+{
+    Node *node;
+
+    /* 1) 노드 이름 읽기 */
+    if (!isNodeChar(str[*index])) {
+        printf("오류: 노드 이름(영문 대문자)이 필요합니다. (위치 %d)\n", *index + 1);
+        *error = 1;
+        return NULL;
+    }
+    node = createNode(str[*index]);
+    (*index)++;
+
+    /* 2) 괄호가 없으면 단말 노드 */
+    if (str[*index] != '(') {
+        return node;
+    }
+    (*index)++;   /* '(' 건너뜀 */
+
+    /* 3) 왼쪽 자식: 대문자가 바로 나오면 왼쪽 자식이 있다. */
+    if (isNodeChar(str[*index])) {
+        node->left = parseTree(str, index, error);
+        if (*error) return node;
+    }
+
+    /* 4) 쉼표 */
+    if (str[*index] != ',') {
+        printf("오류: ',' 가 필요합니다. (위치 %d)\n", *index + 1);
+        *error = 1;
+        return node;
+    }
+    (*index)++;   /* ',' 건너뜀 */
+
+    /* 5) 오른쪽 자식: 대문자가 나오면 오른쪽 자식이 있다. */
+    if (isNodeChar(str[*index])) {
+        node->right = parseTree(str, index, error);
+        if (*error) return node;
+    }
+
+    /* 6) 닫는 괄호 */
+    if (str[*index] != ')') {
+        printf("오류: ')' 가 필요합니다. (위치 %d)\n", *index + 1);
+        *error = 1;
+        return node;
+    }
+    (*index)++;   /* ')' 건너뜀 */
+
+    /* A(,) 처럼 괄호 안에 자식이 하나도 없으면 잘못된 입력 */
+    if (node->left == NULL && node->right == NULL) {
+        printf("오류: 괄호 안에 자식이 하나도 없습니다.\n");
+        *error = 1;
+    }
+    return node;
+}
+
+/* ---------------------------------------------------------
+ * [1] 이진트리 출력 (왼쪽으로 눕힌 형태)
+ *
+ * 오른쪽 서브트리 -> 자기 자신 -> 왼쪽 서브트리 순서로 출력하면
+ * 트리를 왼쪽으로 90도 눕힌 모양이 된다.
+ * 레벨이 하나 깊어질 때마다 4칸씩 들여쓴다.
+ * --------------------------------------------------------- */
+void printTree(Node *node, int level)
+{
+    int i;
+
+    if (node == NULL) return;
+
+    printTree(node->right, level + 1);
+
+    for (i = 0; i < level; i++) {
+        printf("    ");
+    }
+    printf("%c\n", node->data);
+
+    printTree(node->left, level + 1);
+}
+
+/* ---------------------------------------------------------
+ * [2] 트리 정보 계산
+ * --------------------------------------------------------- */
+
+/* 전체 노드 수 */
+int countNodes(Node *node)
+{
+    if (node == NULL) return 0;
+    return 1 + countNodes(node->left) + countNodes(node->right);
+}
+
+/* 단말 노드 수 : left, right 가 모두 NULL 인 노드 */
+int countLeaves(Node *node)
+{
+    if (node == NULL) return 0;
+    if (node->left == NULL && node->right == NULL) return 1;
+    return countLeaves(node->left) + countLeaves(node->right);
+}
+
+/* 비단말 노드 수 : 자식이 하나 이상 있는 노드 */
+int countNonLeaves(Node *node)
+{
+    if (node == NULL) return 0;
+    if (node->left == NULL && node->right == NULL) return 0;
+    return 1 + countNonLeaves(node->left) + countNonLeaves(node->right);
+}
+
+/*
+ * 트리의 높이
+ * [기준] 루트를 레벨 1로 보고, 가장 깊은 노드의 레벨을 높이로 한다.
+ *        (노드가 루트 하나뿐이면 높이 = 1)
+ */
+int getHeight(Node *node)
+{
+    int leftH, rightH;
+
+    if (node == NULL) return 0;
+
+    leftH = getHeight(node->left);
+    rightH = getHeight(node->right);
+
+    return 1 + (leftH > rightH ? leftH : rightH);
+}
+
+/* 트리의 차수 : 트리를 탐색하며 한 노드가 가진 자식 수의 최댓값을 구한다. */
+int getDegree(Node *node)
+{
+    int degree = 0, leftD, rightD;
+
+    if (node == NULL) return 0;
+
+    if (node->left != NULL)  degree++;
+    if (node->right != NULL) degree++;
+
+    leftD = getDegree(node->left);
+    rightD = getDegree(node->right);
+
+    if (leftD > degree)  degree = leftD;
+    if (rightD > degree) degree = rightD;
+    return degree;
+}
+
+/* ---------------------------------------------------------
+ * [3] 이진트리 형태 판별
+ * --------------------------------------------------------- */
+
+/*
+ * 완전 이진트리 판별 (레벨 순회, 큐 사용)
+ *
+ * 위에서 아래, 왼쪽에서 오른쪽 순서로 노드를 방문하면서
+ *  - 왼쪽 자식은 없는데 오른쪽 자식만 있으면 -> 완전 이진트리가 아님
+ *  - 자식이 하나 이하인 노드가 한 번 나온 뒤에는
+ *    그 뒤에 나오는 모든 노드가 자식이 없어야 한다.
+ */
+int isComplete(Node *root)
+{
+    Node *queue[MAX_LEN];   /* 노드 수는 입력 길이를 넘을 수 없다. */
+    int front = 0, rear = 0;
+    int foundNotFull = 0;   /* 자식이 2개가 아닌 노드를 이미 만났는가? */
+    Node *cur;
+
+    if (root == NULL) return 1;
+
+    queue[rear++] = root;
+
+    while (front < rear) {
+        cur = queue[front++];
+
+        /* 이미 빈 자리가 나왔는데 또 자식이 있으면 실패 */
+        if (foundNotFull && (cur->left != NULL || cur->right != NULL)) {
+            return 0;
+        }
+        /* 왼쪽이 비었는데 오른쪽만 있으면 실패 */
+        if (cur->left == NULL && cur->right != NULL) {
+            return 0;
+        }
+        /* 자식이 2개가 아니면 이후로는 단말 노드만 나와야 함 */
+        if (cur->left == NULL || cur->right == NULL) {
+            foundNotFull = 1;
+        }
+
+        if (cur->left != NULL)  queue[rear++] = cur->left;
+        if (cur->right != NULL) queue[rear++] = cur->right;
+    }
+    return 1;
+}
+
+/*
+ * 포화 이진트리 판별 (재귀)
+ *  - 자식이 없는 노드(단말)는 반드시 마지막 레벨(height)에 있어야 한다.
+ *  - 자식이 있는 노드는 반드시 왼쪽, 오른쪽 자식을 모두 가져야 한다.
+ * level : 현재 노드의 레벨 (루트 = 1)
+ */
+int checkFull(Node *node, int level, int height)
+{
+    if (node->left == NULL && node->right == NULL) {
+        return (level == height);
+    }
+    if (node->left != NULL && node->right != NULL) {
+        return checkFull(node->left, level + 1, height) &&
+               checkFull(node->right, level + 1, height);
+    }
+    return 0;   /* 자식이 하나뿐인 노드가 있음 */
+}
+
+int isFull(Node *root)
+{
+    if (root == NULL) return 1;
+    return checkFull(root, 1, getHeight(root));
+}
+
+/*
+ * 편향 이진트리 판별 (재귀)
+ * 왼쪽과 오른쪽 자식을 동시에 가진 노드가 하나라도 있으면 편향이 아니다.
+ */
+int isSkewed(Node *node)
+{
+    if (node == NULL) return 1;
+    if (node->left != NULL && node->right != NULL) return 0;
+    return isSkewed(node->left) && isSkewed(node->right);
+}
+
+/* YES / NO 문자열로 바꿔 주는 함수 */
+const char *yesNo(int value)
+{
+    return value ? "YES" : "NO";
+}
+
+/* ---------------------------------------------------------
+ * main
+ * --------------------------------------------------------- */
+int main(void)
+{
+    char input[MAX_LEN];
+    Node *root;
+    int index = 0;
+    int error = 0;
+
+    printf("이진트리를 괄호 표기법으로 입력하세요 (예: A(B,C(D,E))): ");
+    if (fgets(input, MAX_LEN, stdin) == NULL) {
+        printf("입력 오류\n");
+        return 1;
+    }
+
+    removeNewline(input);
+    removeSpaces(input);
+
+    /* 문자열을 분석하여 연결 구조의 트리를 만든다. */
+    root = parseTree(input, &index, &error);
+
+    /* 트리 뒤에 남는 문자가 있으면 오류 */
+    if (!error && input[index] != '\0') {
+        printf("오류: 입력 끝에 잘못된 문자가 있습니다. (위치 %d)\n", index + 1);
+        error = 1;
+    }
+
+    if (error) {
+        printf("올바르지 않은 입력입니다.\n");
+        freeTree(root);   /* 만들다 만 트리도 해제 */
+        return 1;
+    }
+
+    /* [1] 이진트리 출력 */
+    printf("\n[이진트리]\n");
+    printTree(root, 0);
+
+    /* [2] 트리 정보 */
+    printf("\n[트리 정보]\n");
+    printf("전체 노드 수: %d\n", countNodes(root));
+    printf("단말 노드 수: %d\n", countLeaves(root));
+    printf("비단말 노드 수: %d\n", countNonLeaves(root));
+    printf("트리의 높이: %d (루트를 레벨 1로 계산)\n", getHeight(root));
+    printf("트리의 차수: %d\n", getDegree(root));
+
+    /* [3] 이진트리 형태 */
+    printf("\n[이진트리 형태]\n");
+    printf("완전 이진트리: %s\n", yesNo(isComplete(root)));
+    printf("포화 이진트리: %s\n", yesNo(isFull(root)));
+    printf("편향 이진트리: %s\n", yesNo(isSkewed(root)));
+
+    /* 동적으로 할당한 메모리 해제 */
+    freeTree(root);
+    return 0;
+}

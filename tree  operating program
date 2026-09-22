@@ -1,0 +1,463 @@
+/*
+ * 경로(Path) 기반 이진트리 관리 프로그램
+ * ----------------------------------------
+ * 각 노드는 영문 대문자 한 글자의 데이터를 가지며,
+ * 루트부터 해당 노드까지의 경로를 "/"로 연결한 문자열로 노드를 식별한다.
+ * (같은 부모의 왼쪽/오른쪽 자식은 같은 데이터를 가질 수 없으므로
+ *  경로만 있으면 노드를 유일하게 찾을 수 있다.)
+ *
+ * 지원 명령: Insert(I), Delete(D), Update(U), Read(R), Print(P)
+ *
+ * 컴파일: gcc -o tree tree.c
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+#define MAX_LINE_LEN 512
+#define MAX_TOKENS   16
+#define MAX_PATH_LEN 256
+
+/* ----------------------- 자료구조 정의 ----------------------- */
+
+typedef struct Node {
+    char data;
+    struct Node *left;
+    struct Node *right;
+} Node;
+
+typedef struct {
+    Node *root;
+    int max_size;   /* create_btree(size)로 전달받은 최대 노드 수 */
+    int count;      /* 현재 트리에 존재하는 노드 수 */
+} BTree;
+
+/* ----------------------- 함수 프로토타입 ----------------------- */
+
+BTree *create_btree(int size);
+int    insert_root(BTree *tree, char value);
+int    insert_child(BTree *tree, const char *parent_path, char child, char value);
+int    delete_node(BTree *tree, const char *path);
+int    update_value(BTree *tree, const char *path, char value);
+void   read_child(BTree *tree, const char *parent_path);
+void   print_btree(BTree *tree);
+void   destroy_btree(BTree *tree);
+
+static int  validate_path_format(const char *path);
+static int  find_node_ex(BTree *tree, const char *path,
+                          Node **out_node, Node **out_parent, char *out_side);
+static void free_subtree(Node *node);
+static void print_preorder(Node *node, int depth);
+
+/* ----------------------- ADT 구현 ----------------------- */
+
+/* 최대 size개의 노드를 저장할 수 있는 빈 이진트리 생성 */
+BTree *create_btree(int size) {
+    BTree *tree = (BTree *)malloc(sizeof(BTree));
+    if (tree == NULL) {
+        fprintf(stderr, "메모리 할당 실패\n");
+        exit(1);
+    }
+    tree->root = NULL;
+    tree->max_size = size;
+    tree->count = 0;
+    return tree;
+}
+
+/* 빈 트리에 루트 생성 */
+int insert_root(BTree *tree, char value) {
+    if (tree->root != NULL) {
+        printf("오류: 이미 루트가 존재합니다.\n");
+        return 0;
+    }
+    if (tree->count >= tree->max_size) {
+        printf("오류: 최대 노드 수를 초과했습니다.\n");
+        return 0;
+    }
+    Node *node = (Node *)malloc(sizeof(Node));
+    if (node == NULL) {
+        printf("오류: 메모리 할당에 실패했습니다.\n");
+        return 0;
+    }
+    node->data = value;
+    node->left = NULL;
+    node->right = NULL;
+    tree->root = node;
+    tree->count++;
+    return 1;
+}
+
+/* parent 경로 노드 아래 L/R 위치에 새 노드 추가 */
+int insert_child(BTree *tree, const char *parent_path, char child, char value) {
+    Node *parent = NULL, *pparent = NULL;
+    char pside = 0;
+
+    if (!find_node_ex(tree, parent_path, &parent, &pparent, &pside)) {
+        printf("오류: 부모 노드 경로 '%s'가 존재하지 않습니다.\n", parent_path);
+        return 0;
+    }
+
+    if (child != 'L' && child != 'R') {
+        printf("오류: child는 L 또는 R이어야 합니다.\n");
+        return 0;
+    }
+
+    if (child == 'L' && parent->left != NULL) {
+        printf("오류: 왼쪽 자식이 이미 존재합니다.\n");
+        return 0;
+    }
+    if (child == 'R' && parent->right != NULL) {
+        printf("오류: 오른쪽 자식이 이미 존재합니다.\n");
+        return 0;
+    }
+
+    /* 반대쪽 자식과 데이터 중복 검사 */
+    Node *sibling = (child == 'L') ? parent->right : parent->left;
+    if (sibling != NULL && sibling->data == value) {
+        printf("오류: 같은 부모의 왼쪽/오른쪽 자식이 같은 데이터를 가질 수 없습니다.\n");
+        return 0;
+    }
+
+    if (tree->count >= tree->max_size) {
+        printf("오류: 최대 노드 수를 초과했습니다.\n");
+        return 0;
+    }
+
+    Node *node = (Node *)malloc(sizeof(Node));
+    if (node == NULL) {
+        printf("오류: 메모리 할당에 실패했습니다.\n");
+        return 0;
+    }
+    node->data = value;
+    node->left = NULL;
+    node->right = NULL;
+
+    if (child == 'L') parent->left = node;
+    else parent->right = node;
+
+    tree->count++;
+    return 1;
+}
+
+/* 지정된 단말 노드 삭제 */
+int delete_node(BTree *tree, const char *path) {
+    Node *node = NULL, *parent = NULL;
+    char side = 0;
+
+    if (!find_node_ex(tree, path, &node, &parent, &side)) {
+        printf("오류: 경로 '%s'가 존재하지 않습니다.\n", path);
+        return 0;
+    }
+
+    if (node->left != NULL || node->right != NULL) {
+        printf("오류: 단말 노드(자식이 없는 노드)만 삭제할 수 있습니다.\n");
+        return 0;
+    }
+
+    if (parent == NULL) {
+        /* 루트 삭제 -> 트리가 다시 빈 트리가 됨 */
+        tree->root = NULL;
+    } else {
+        if (side == 'L') parent->left = NULL;
+        else parent->right = NULL;
+    }
+
+    free(node);
+    tree->count--;
+    return 1;
+}
+
+/* 지정한 노드의 데이터 변경 (경로는 데이터 기반이므로 자동으로 갱신됨) */
+int update_value(BTree *tree, const char *path, char value) {
+    Node *node = NULL, *parent = NULL;
+    char side = 0;
+
+    if (!find_node_ex(tree, path, &node, &parent, &side)) {
+        printf("오류: 경로 '%s'가 존재하지 않습니다.\n", path);
+        return 0;
+    }
+
+    if (parent != NULL) {
+        Node *sibling = (side == 'L') ? parent->right : parent->left;
+        if (sibling != NULL && sibling->data == value) {
+            printf("오류: 변경 결과 같은 부모의 두 자식이 같은 데이터를 가지게 됩니다.\n");
+            return 0;
+        }
+    }
+
+    node->data = value;
+    return 1;
+}
+
+/* parent 노드의 왼쪽/오른쪽 자식 정보 출력 */
+void read_child(BTree *tree, const char *parent_path) {
+    Node *node = NULL, *parent = NULL;
+    char side = 0;
+
+    if (!find_node_ex(tree, parent_path, &node, &parent, &side)) {
+        printf("오류: 경로 '%s'가 존재하지 않습니다.\n", parent_path);
+        return;
+    }
+
+    if (node->left == NULL && node->right == NULL) {
+        printf("자식이 없습니다.\n");
+        return;
+    }
+
+    if (node->left != NULL && node->right != NULL) {
+        printf("%c(L), %c(R)\n", node->left->data, node->right->data);
+    } else if (node->left != NULL) {
+        printf("%c(L)\n", node->left->data);
+    } else {
+        printf("%c(R)\n", node->right->data);
+    }
+}
+
+/* 트리를 왼쪽으로 눕힌 형태로 출력 (전위 순회) */
+void print_btree(BTree *tree) {
+    if (tree->root == NULL) {
+        printf("트리가 비어 있습니다.\n");
+        return;
+    }
+    print_preorder(tree->root, 0);
+}
+
+static void print_preorder(Node *node, int depth) {
+    if (node == NULL) return;
+
+    if (depth == 0) {
+        printf("%c\n", node->data);
+    } else {
+        for (int i = 0; i < depth - 1; i++) printf("    ");
+        printf("+---%c\n", node->data);
+    }
+
+    print_preorder(node->left, depth + 1);
+    print_preorder(node->right, depth + 1);
+}
+
+/* 트리의 모든 노드를 삭제하고 tree 자체도 해제 */
+void destroy_btree(BTree *tree) {
+    if (tree == NULL) return;
+    free_subtree(tree->root);
+    tree->root = NULL;
+    tree->count = 0;
+    free(tree);
+}
+
+static void free_subtree(Node *node) {
+    if (node == NULL) return;
+    free_subtree(node->left);
+    free_subtree(node->right);
+    free(node);
+}
+
+/* ----------------------- 경로 처리 ----------------------- */
+
+/* 경로 형식 검사: "/"(루트 없음 표시) 또는 "/X", "/X/Y", ... 형태만 허용 */
+static int validate_path_format(const char *path) {
+    if (path == NULL || path[0] != '/') return 0;
+    if (path[1] == '\0') return 1; /* "/" 자체는 형식상 유효 (빈 트리 표시용) */
+
+    int i = 1;
+    while (path[i] != '\0') {
+        if (!isupper((unsigned char)path[i])) return 0;
+        i++;
+        if (path[i] == '\0') break;
+        if (path[i] != '/') return 0;
+        i++;
+        if (path[i] == '\0') return 0; /* "/A/" 처럼 끝에 슬래시만 있는 경우 금지 */
+    }
+    return 1;
+}
+
+/*
+ * 경로 문자열로 실제 노드를 탐색한다.
+ * 같은 부모의 왼쪽/오른쪽 자식은 데이터가 다르므로, 각 단계에서
+ * 일치하는 자식은 최대 하나이며 경로를 따라가면 노드가 유일하게 결정된다.
+ * 성공 시 1, 실패(형식 오류/없는 경로/빈 트리 등) 시 0을 반환한다.
+ */
+static int find_node_ex(BTree *tree, const char *path,
+                         Node **out_node, Node **out_parent, char *out_side) {
+    if (!validate_path_format(path)) return 0;
+    if (strcmp(path, "/") == 0) return 0; /* "/"는 실제 노드가 아님 */
+    if (tree->root == NULL) return 0;
+
+    char buf[MAX_PATH_LEN];
+    strncpy(buf, path + 1, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    char *token = strtok(buf, "/");
+    if (token == NULL || strlen(token) != 1 || token[0] != tree->root->data) {
+        return 0;
+    }
+
+    Node *cur = tree->root;
+    Node *parent = NULL;
+    char side = 0;
+
+    token = strtok(NULL, "/");
+    while (token != NULL) {
+        if (strlen(token) != 1) return 0;
+        char c = token[0];
+        Node *next = NULL;
+        char nside = 0;
+
+        if (cur->left != NULL && cur->left->data == c) {
+            next = cur->left;
+            nside = 'L';
+        } else if (cur->right != NULL && cur->right->data == c) {
+            next = cur->right;
+            nside = 'R';
+        }
+
+        if (next == NULL) return 0;
+
+        parent = cur;
+        side = nside;
+        cur = next;
+        token = strtok(NULL, "/");
+    }
+
+    *out_node = cur;
+    *out_parent = parent;
+    *out_side = side;
+    return 1;
+}
+
+/* ----------------------- 입력 처리 / main ----------------------- */
+
+/* 문자열이 명령어(전체 이름 또는 첫 글자)와 일치하는지 검사 (대소문자 무시) */
+static int match_cmd(const char *tok, const char *full, char short_c) {
+    if (strlen(tok) == 1) {
+        return tolower((unsigned char)tok[0]) == short_c;
+    }
+    if (strlen(tok) != strlen(full)) return 0;
+    for (size_t i = 0; i < strlen(tok); i++) {
+        if (tolower((unsigned char)tok[i]) != tolower((unsigned char)full[i])) return 0;
+    }
+    return 1;
+}
+
+/* 한 글자로 이루어진 영문 대문자 토큰인지 검사 */
+static int is_single_upper(const char *tok) {
+    return (strlen(tok) == 1 && isupper((unsigned char)tok[0]));
+}
+
+int main(void) {
+    #define MAX_SIZE 100
+    BTree *tree = create_btree(MAX_SIZE);
+
+    char line[MAX_LINE_LEN];
+
+    while (fgets(line, sizeof(line), stdin) != NULL) {
+        /* 개행 문자 제거 */
+        line[strcspn(line, "\r\n")] = '\0';
+
+        /* 토큰화 */
+        char *tokens[MAX_TOKENS];
+        int ntok = 0;
+        char *tok = strtok(line, " \t");
+        int too_many_tokens = 0;
+        while (tok != NULL) {
+            if (ntok < MAX_TOKENS) {
+                tokens[ntok++] = tok;
+            } else {
+                too_many_tokens = 1;
+            }
+            tok = strtok(NULL, " \t");
+        }
+
+        if (ntok == 0) continue; /* 빈 줄은 무시 */
+
+        if (too_many_tokens) {
+            printf("오류: 명령의 인자가 너무 많습니다.\\n");
+            continue;
+        }
+
+        char *cmd = tokens[0];
+
+        if (match_cmd(cmd, "insert", 'i')) {
+            if (ntok == 3) {
+                /* Insert / A  -> 루트 생성 */
+                char *path = tokens[1];
+                char *value_str = tokens[2];
+
+                if (strcmp(path, "/") != 0) {
+                    printf("오류: 부모 노드 경로 '%s'가 존재하지 않습니다.\n", path);
+                    continue;
+                }
+                if (!is_single_upper(value_str)) {
+                    printf("오류: 데이터는 영문 대문자 한 글자여야 합니다.\n");
+                    continue;
+                }
+                insert_root(tree, value_str[0]);
+
+            } else if (ntok == 4) {
+                /* Insert parent-node child new-data */
+                char *path = tokens[1];
+                char *child_str = tokens[2];
+                char *value_str = tokens[3];
+
+                if (strcmp(path, "/") == 0) {
+                    printf("오류: 트리가 비어있지 않은 상태에서 '/'에 삽입할 수 없습니다.\n");
+                    continue;
+                }
+                if (strlen(child_str) != 1 || (child_str[0] != 'L' && child_str[0] != 'R')) {
+                    printf("오류: child는 L 또는 R이어야 합니다.\n");
+                    continue;
+                }
+                if (!is_single_upper(value_str)) {
+                    printf("오류: 데이터는 영문 대문자 한 글자여야 합니다.\n");
+                    continue;
+                }
+                insert_child(tree, path, child_str[0], value_str[0]);
+
+            } else {
+                printf("오류: Insert 명령의 인자 개수가 올바르지 않습니다.\n");
+            }
+
+        } else if (match_cmd(cmd, "delete", 'd')) {
+            if (ntok == 2) {
+                delete_node(tree, tokens[1]);
+            } else {
+                printf("오류: Delete 명령의 인자 개수가 올바르지 않습니다.\n");
+            }
+
+        } else if (match_cmd(cmd, "update", 'u')) {
+            if (ntok == 3) {
+                char *path = tokens[1];
+                char *value_str = tokens[2];
+                if (!is_single_upper(value_str)) {
+                    printf("오류: 데이터는 영문 대문자 한 글자여야 합니다.\n");
+                    continue;
+                }
+                update_value(tree, path, value_str[0]);
+            } else {
+                printf("오류: Update 명령의 인자 개수가 올바르지 않습니다.\n");
+            }
+
+        } else if (match_cmd(cmd, "read", 'r')) {
+            if (ntok == 2) {
+                read_child(tree, tokens[1]);
+            } else {
+                printf("오류: Read 명령의 인자 개수가 올바르지 않습니다.\n");
+            }
+
+        } else if (match_cmd(cmd, "print", 'p')) {
+            if (ntok == 1) {
+                print_btree(tree);
+            } else {
+                printf("오류: Print 명령은 추가 인자를 받지 않습니다.\n");
+            }
+
+        } else {
+            printf("오류: 알 수 없는 명령어 '%s'입니다.\n", cmd);
+        }
+    }
+
+    destroy_btree(tree);
+    return 0;
+}

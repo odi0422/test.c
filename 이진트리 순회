@@ -1,0 +1,645 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+#define MAX_NODES 1000
+#define MAX_INPUT 4096
+
+/* ---------------- 노드 정의 ---------------- */
+typedef struct Node {
+    char data;
+    struct Node *left;
+    struct Node *right;
+} Node;
+
+/* ---------------- 노드 생성 ---------------- */
+Node *createNode(char data) {
+    Node *n = (Node *)malloc(sizeof(Node));
+
+    if (n == NULL) {
+        printf("오류: 메모리 할당에 실패했습니다.\n");
+        exit(1);
+    }
+
+    n->data = data;
+    n->left = NULL;
+    n->right = NULL;
+
+    return n;
+}
+
+/* ============================================================
+   괄호 표기법 파싱용 스택
+   slot
+   0 : 왼쪽 자식 대기
+   1 : 오른쪽 자식 대기
+   2 : 자식 입력 완료
+   ============================================================ */
+typedef struct {
+    Node *node;
+    int slot;
+} ParseFrame;
+
+typedef struct {
+    ParseFrame data[MAX_NODES];
+    int top;
+} ParseStack;
+
+void psInit(ParseStack *s) {
+    s->top = -1;
+}
+
+int psEmpty(ParseStack *s) {
+    return s->top == -1;
+}
+
+void psPush(ParseStack *s, ParseFrame f) {
+    if (s->top >= MAX_NODES - 1) {
+        printf("오류: 트리 깊이가 너무 큽니다.\n");
+        exit(1);
+    }
+
+    s->data[++(s->top)] = f;
+}
+
+ParseFrame *psPeek(ParseStack *s) {
+    if (s->top < 0)
+        return NULL;
+
+    return &s->data[s->top];
+}
+
+void psPop(ParseStack *s) {
+    if (s->top >= 0)
+        s->top--;
+}
+
+/* ---------------- 입력 오류 처리 ---------------- */
+void parseError(const char *msg) {
+    printf("입력 오류: %s\n", msg);
+    exit(1);
+}
+
+/* ============================================================
+   괄호 표기법으로 입력된 이진트리 생성
+   예:
+   A(B(D,E),C(,F))
+   ============================================================ */
+Node *parseTree(const char *s) {
+    int len = (int)strlen(s);
+
+    if (len == 0)
+        parseError("입력이 비어 있습니다.");
+
+    ParseStack stack;
+    psInit(&stack);
+
+    Node *root = NULL;
+
+    int rootSet = 0;
+    int expectChild = 1;
+    int i = 0;
+
+    while (i < len) {
+        char c = s[i];
+
+        /* ----------------------------------------------------
+           노드 또는 빈 자식을 기대하는 상태
+           ---------------------------------------------------- */
+        if (expectChild) {
+
+            /* 영문 대문자 → 새로운 노드 */
+            if (isupper((unsigned char)c)) {
+
+                Node *n = createNode(c);
+
+                /* 루트 노드 */
+                if (psEmpty(&stack)) {
+
+                    if (rootSet) {
+                        parseError("루트 노드 뒤에 불필요한 문자가 있습니다.");
+                    }
+
+                    root = n;
+                    rootSet = 1;
+                }
+
+                /* 부모 노드의 자식 */
+                else {
+                    ParseFrame *top = psPeek(&stack);
+
+                    if (top->slot == 0) {
+                        top->node->left = n;
+                        top->slot = 1;
+                    }
+                    else if (top->slot == 1) {
+                        top->node->right = n;
+                        top->slot = 2;
+                    }
+                    else {
+                        parseError("한 노드에 자식이 2개를 초과합니다.");
+                    }
+                }
+
+                i++;
+
+                /* 바로 다음에 '('가 있으면 자식 입력 시작 */
+                if (i < len && s[i] == '(') {
+
+                    ParseFrame f;
+
+                    f.node = n;
+                    f.slot = 0;
+
+                    psPush(&stack, f);
+
+                    i++;
+                    expectChild = 1;
+                }
+                else {
+                    expectChild = 0;
+                }
+            }
+
+            /* 빈 왼쪽/오른쪽 자식 */
+            else if (c == ',' || c == ')') {
+
+                if (psEmpty(&stack)) {
+                    parseError("괄호 밖에서 잘못된 위치의 문자입니다.");
+                }
+
+                ParseFrame *top = psPeek(&stack);
+
+                /*
+                   ','는 왼쪽 자식이 비어 있음을 의미한다.
+                   ')'는 오른쪽 자식이 비어 있음을 의미할 수 있다.
+                */
+                if (c == ',') {
+
+                    if (top->slot != 0) {
+                        parseError("쉼표의 위치가 잘못되었습니다.");
+                    }
+
+                    top->slot = 1;
+
+                    i++;
+                    expectChild = 1;
+                }
+                else {
+                    /* c == ')' */
+
+                    if (top->slot == 0) {
+                        /* 왼쪽과 오른쪽 자식이 모두 없는 경우 */
+                        top->slot = 2;
+                    }
+                    else if (top->slot == 1) {
+                        /* 오른쪽 자식이 없는 경우 */
+                        top->slot = 2;
+                    }
+                    else {
+                        parseError("닫는 괄호의 위치가 잘못되었습니다.");
+                    }
+
+                    psPop(&stack);
+
+                    i++;
+                    expectChild = 0;
+                }
+            }
+
+            else {
+                parseError("노드 데이터는 영문 대문자 한 글자여야 합니다.");
+            }
+        }
+
+        /* ----------------------------------------------------
+           노드 입력 후 다음 문자를 기대하는 상태
+           ---------------------------------------------------- */
+        else {
+
+            /* 쉼표 → 오른쪽 자식으로 이동 */
+            if (c == ',') {
+
+                if (psEmpty(&stack)) {
+                    parseError("쉼표의 위치가 잘못되었습니다.");
+                }
+
+                ParseFrame *top = psPeek(&stack);
+
+                if (top->slot != 1) {
+                    parseError("쉼표의 위치가 잘못되었습니다.");
+                }
+
+                i++;
+                expectChild = 1;
+            }
+
+            /* 닫는 괄호 */
+            else if (c == ')') {
+
+                if (psEmpty(&stack)) {
+                    parseError("닫는 괄호가 예상되지 않은 위치에 있습니다.");
+                }
+
+                ParseFrame *top = psPeek(&stack);
+
+                if (top->slot == 0) {
+                    parseError("자식 정보가 올바르지 않습니다.");
+                }
+
+                psPop(&stack);
+
+                i++;
+                expectChild = 0;
+            }
+
+            else {
+                parseError("불필요한 문자가 있습니다.");
+            }
+        }
+    }
+
+    /* 아직 닫히지 않은 괄호가 존재 */
+    if (!psEmpty(&stack)) {
+        parseError("괄호가 올바르게 닫히지 않았습니다.");
+    }
+
+    if (!rootSet) {
+        parseError("입력이 비어 있습니다.");
+    }
+
+    return root;
+}
+
+/* ============================================================
+   Node* 스택
+   ============================================================ */
+typedef struct {
+    Node *data[MAX_NODES];
+    int top;
+} NodeStack;
+
+void nsInit(NodeStack *s) {
+    s->top = -1;
+}
+
+int nsEmpty(NodeStack *s) {
+    return s->top == -1;
+}
+
+void nsPush(NodeStack *s, Node *n) {
+    if (s->top >= MAX_NODES - 1) {
+        printf("오류: 스택 용량을 초과했습니다.\n");
+        exit(1);
+    }
+
+    s->data[++(s->top)] = n;
+}
+
+Node *nsPop(NodeStack *s) {
+    if (nsEmpty(s))
+        return NULL;
+
+    return s->data[(s->top)--];
+}
+
+/* ============================================================
+   전위 순회
+   Root → Left → Right
+
+   반복문 + 스택 사용
+   ============================================================ */
+void preorder(Node *root) {
+
+    if (root == NULL)
+        return;
+
+    NodeStack stack;
+    nsInit(&stack);
+
+    nsPush(&stack, root);
+
+    while (!nsEmpty(&stack)) {
+
+        Node *cur = nsPop(&stack);
+
+        printf("%c ", cur->data);
+
+        /*
+           스택은 LIFO이므로
+           오른쪽을 먼저 넣고 왼쪽을 나중에 넣는다.
+        */
+        if (cur->right != NULL)
+            nsPush(&stack, cur->right);
+
+        if (cur->left != NULL)
+            nsPush(&stack, cur->left);
+    }
+}
+
+/* ============================================================
+   중위 순회
+   Left → Root → Right
+
+   반복문 + 스택 사용
+   ============================================================ */
+void inorder(Node *root) {
+
+    NodeStack stack;
+    nsInit(&stack);
+
+    Node *cur = root;
+
+    while (cur != NULL || !nsEmpty(&stack)) {
+
+        /* 왼쪽 끝까지 이동 */
+        while (cur != NULL) {
+            nsPush(&stack, cur);
+            cur = cur->left;
+        }
+
+        /* 현재 노드 방문 */
+        cur = nsPop(&stack);
+
+        printf("%c ", cur->data);
+
+        /* 오른쪽 서브트리로 이동 */
+        cur = cur->right;
+    }
+}
+
+/* ============================================================
+   후위 순회
+   Left → Right → Root
+
+   반복문 + 스택 2개 사용
+   ============================================================ */
+void postorder(Node *root) {
+
+    if (root == NULL)
+        return;
+
+    NodeStack stack1;
+    NodeStack stack2;
+
+    nsInit(&stack1);
+    nsInit(&stack2);
+
+    nsPush(&stack1, root);
+
+    while (!nsEmpty(&stack1)) {
+
+        Node *cur = nsPop(&stack1);
+
+        nsPush(&stack2, cur);
+
+        if (cur->left != NULL)
+            nsPush(&stack1, cur->left);
+
+        if (cur->right != NULL)
+            nsPush(&stack1, cur->right);
+    }
+
+    while (!nsEmpty(&stack2)) {
+
+        Node *cur = nsPop(&stack2);
+
+        printf("%c ", cur->data);
+    }
+}
+
+/* ============================================================
+   트리 구조 출력용
+   ============================================================ */
+typedef struct {
+    Node *node;
+    char prefix[512];
+    int isLast;
+    int isRoot;
+} PrintFrame;
+
+typedef struct {
+    PrintFrame data[MAX_NODES];
+    int top;
+} PrintStack;
+
+void ppInit(PrintStack *s) {
+    s->top = -1;
+}
+
+int ppEmpty(PrintStack *s) {
+    return s->top == -1;
+}
+
+void ppPush(PrintStack *s, PrintFrame f) {
+
+    if (s->top >= MAX_NODES - 1) {
+        printf("오류: 트리 출력 스택 용량을 초과했습니다.\n");
+        exit(1);
+    }
+
+    s->data[++(s->top)] = f;
+}
+
+PrintFrame ppPop(PrintStack *s) {
+
+    if (ppEmpty(s)) {
+        PrintFrame empty = { NULL, "", 0, 0 };
+        return empty;
+    }
+
+    return s->data[(s->top)--];
+}
+
+/* ============================================================
+   트리 구조 출력
+   반복문 + 스택 사용
+   ============================================================ */
+void printTree(Node *root) {
+
+    if (root == NULL)
+        return;
+
+    PrintStack stack;
+    ppInit(&stack);
+
+    PrintFrame rootFrame;
+
+    rootFrame.node = root;
+    rootFrame.prefix[0] = '\0';
+    rootFrame.isLast = 1;
+    rootFrame.isRoot = 1;
+
+    ppPush(&stack, rootFrame);
+
+    while (!ppEmpty(&stack)) {
+
+        PrintFrame f = ppPop(&stack);
+
+        if (f.isRoot) {
+            printf("%c\n", f.node->data);
+        }
+        else {
+            printf("%s%s%c\n",
+                   f.prefix,
+                   f.isLast ? "└── " : "├── ",
+                   f.node->data);
+        }
+
+        char childPrefix[512];
+
+        if (f.isRoot) {
+            childPrefix[0] = '\0';
+        }
+        else {
+            snprintf(childPrefix,
+                     sizeof(childPrefix),
+                     "%s%s",
+                     f.prefix,
+                     f.isLast ? "    " : "│   ");
+        }
+
+        int hasLeft = (f.node->left != NULL);
+        int hasRight = (f.node->right != NULL);
+
+        /*
+           오른쪽을 먼저 push하고
+           왼쪽을 나중에 push하여
+           실제 출력은 왼쪽 → 오른쪽 순서가 되도록 한다.
+        */
+        if (hasLeft && hasRight) {
+
+            PrintFrame rightFrame;
+            PrintFrame leftFrame;
+
+            rightFrame.node = f.node->right;
+            strcpy(rightFrame.prefix, childPrefix);
+            rightFrame.isLast = 1;
+            rightFrame.isRoot = 0;
+
+            leftFrame.node = f.node->left;
+            strcpy(leftFrame.prefix, childPrefix);
+            leftFrame.isLast = 0;
+            leftFrame.isRoot = 0;
+
+            ppPush(&stack, rightFrame);
+            ppPush(&stack, leftFrame);
+        }
+
+        else if (hasLeft) {
+
+            PrintFrame leftFrame;
+
+            leftFrame.node = f.node->left;
+            strcpy(leftFrame.prefix, childPrefix);
+            leftFrame.isLast = 1;
+            leftFrame.isRoot = 0;
+
+            ppPush(&stack, leftFrame);
+        }
+
+        else if (hasRight) {
+
+            PrintFrame rightFrame;
+
+            rightFrame.node = f.node->right;
+            strcpy(rightFrame.prefix, childPrefix);
+            rightFrame.isLast = 1;
+            rightFrame.isRoot = 0;
+
+            ppPush(&stack, rightFrame);
+        }
+    }
+}
+
+/* ============================================================
+   메모리 해제
+   재귀 없이 스택을 이용한다.
+   ============================================================ */
+void freeTree(Node *root) {
+
+    if (root == NULL)
+        return;
+
+    NodeStack visit;
+    NodeStack toFree;
+
+    nsInit(&visit);
+    nsInit(&toFree);
+
+    nsPush(&visit, root);
+
+    while (!nsEmpty(&visit)) {
+
+        Node *cur = nsPop(&visit);
+
+        nsPush(&toFree, cur);
+
+        if (cur->left != NULL)
+            nsPush(&visit, cur->left);
+
+        if (cur->right != NULL)
+            nsPush(&visit, cur->right);
+    }
+
+    while (!nsEmpty(&toFree)) {
+
+        Node *cur = nsPop(&toFree);
+
+        free(cur);
+    }
+}
+
+/* ============================================================
+   main
+   ============================================================ */
+int main(void) {
+
+    char input[MAX_INPUT];
+
+    printf("Enter binary tree: ");
+
+    if (fgets(input, sizeof(input), stdin) == NULL) {
+        printf("오류: 입력을 읽을 수 없습니다.\n");
+        return 1;
+    }
+
+    /* 개행 문자 제거 */
+    int len = (int)strlen(input);
+
+    while (len > 0 &&
+           (input[len - 1] == '\n' ||
+            input[len - 1] == '\r')) {
+
+        input[len - 1] = '\0';
+        len--;
+    }
+
+    /* 트리 생성 */
+    Node *root = parseTree(input);
+
+    /* 입력된 트리 구조 출력 */
+    printf("\nInput Tree:\n");
+    printTree(root);
+
+    /* 전위 순회 */
+    printf("\nPreorder  : ");
+    preorder(root);
+    printf("\n");
+
+    /* 중위 순회 */
+    printf("Inorder   : ");
+    inorder(root);
+    printf("\n");
+
+    /* 후위 순회 */
+    printf("Postorder : ");
+    postorder(root);
+    printf("\n");
+
+    /* 메모리 해제 */
+    freeTree(root);
+
+    return 0;
+}

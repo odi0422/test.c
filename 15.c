@@ -6,7 +6,9 @@
 
 #define SIZE_COUNT 6
 
-int sizes[SIZE_COUNT] = {1000, 2000, 4000, 8000, 16000, 20000};
+int sizes[SIZE_COUNT] = {
+    1000, 2000, 4000, 8000, 16000, 20000
+};
 
 typedef struct {
     long long comparisons;
@@ -35,9 +37,17 @@ typedef struct {
     int count;
 } Result;
 
-/* 실행 시간 측정 */
 double getTime(void) {
     return (double)clock() * 1000.0 / CLOCKS_PER_SEC;
+}
+
+int max(int a, int b) {
+    return a > b ? a : b;
+}
+
+/* 배열 데이터 복사 */
+void copyData(int source[], int dest[], int n) {
+    memcpy(dest, source, (size_t)n * sizeof(int));
 }
 
 /* 데이터 교환 */
@@ -48,7 +58,7 @@ void swap(int* a, int* b, Stats* s) {
     s->movements += 3;
 }
 
-/* Median-of-Three 피벗 선택 */
+/* Median-of-Three 피벗 */
 int medianPivot(int a[], int left, int right, Stats* s) {
     int mid = left + (right - left) / 2;
 
@@ -64,11 +74,16 @@ int medianPivot(int a[], int left, int right, Stats* s) {
     if (a[mid] > a[right])
         swap(&a[mid], &a[right], s);
 
-    return a[mid];
+    int pivot = a[mid];
+    s->movements++;
+
+    return pivot;
 }
 
 /* 퀵 정렬 */
-void quickSort(int a[], int left, int right, Stats* s, int depth) {
+void quickSort(int a[], int left, int right,
+               Stats* s, int depth) {
+
     if (left >= right)
         return;
 
@@ -76,13 +91,13 @@ void quickSort(int a[], int left, int right, Stats* s, int depth) {
         s->maxDepth = depth;
 
     int pivot = medianPivot(a, left, right, s);
-    s->movements++;
 
     int i = left;
     int j = right;
 
     while (i <= j) {
-        while (1) {
+
+        while (i <= right) {
             s->comparisons++;
             if (a[i] < pivot)
                 i++;
@@ -90,7 +105,7 @@ void quickSort(int a[], int left, int right, Stats* s, int depth) {
                 break;
         }
 
-        while (1) {
+        while (j >= left) {
             s->comparisons++;
             if (a[j] > pivot)
                 j--;
@@ -101,6 +116,7 @@ void quickSort(int a[], int left, int right, Stats* s, int depth) {
         if (i <= j) {
             if (i != j)
                 swap(&a[i], &a[j], s);
+
             i++;
             j--;
         }
@@ -113,14 +129,16 @@ void quickSort(int a[], int left, int right, Stats* s, int depth) {
         quickSort(a, i, right, s, depth + 1);
 }
 
-/* 정렬된 배열에 삽입 */
+/* 배열 삽입 */
 void arrayInsert(int a[], int* n, int value, Stats* s) {
     int pos = 0;
 
     while (pos < *n) {
         s->comparisons++;
+
         if (a[pos] >= value)
             break;
+
         pos++;
     }
 
@@ -131,10 +149,11 @@ void arrayInsert(int a[], int* n, int value, Stats* s) {
 
     a[pos] = value;
     s->movements++;
+
     (*n)++;
 }
 
-/* 정렬된 배열에서 삭제 */
+/* 배열 삭제 */
 void arrayDelete(int a[], int* n, int value, Stats* s) {
     int pos = 0;
 
@@ -143,6 +162,8 @@ void arrayDelete(int a[], int* n, int value, Stats* s) {
 
         if (a[pos] == value)
             break;
+
+        s->comparisons++;
 
         if (a[pos] > value)
             return;
@@ -161,21 +182,21 @@ void arrayDelete(int a[], int* n, int value, Stats* s) {
     (*n)--;
 }
 
-/* AVL 트리 함수 */
+/* AVL 높이 */
 int height(AVLNode* node) {
     return node ? node->height : 0;
 }
 
-int max(int a, int b) {
-    return a > b ? a : b;
-}
-
+/* 높이 갱신 */
 void updateHeight(AVLNode* node) {
-    node->height = 1 + max(height(node->left), height(node->right));
+    node->height = 1 + max(height(node->left),
+                           height(node->right));
 }
 
+/* 균형 인수 */
 int balanceFactor(AVLNode* node) {
-    return node ? height(node->left) - height(node->right) : 0;
+    return node ? height(node->left) -
+                  height(node->right) : 0;
 }
 
 /* 오른쪽 회전 */
@@ -233,10 +254,12 @@ AVLNode* rebalance(AVLNode* node) {
 }
 
 /* AVL 삽입 */
-AVLNode* avlInsert(AVLNode* node, int value, Stats* s, int depth,
-                  int* nodeCount) {
+AVLNode* avlInsert(AVLNode* node, int value,
+                   Stats* s, int depth, int* nodeCount) {
+
     if (!node) {
-        AVLNode* newNode = (AVLNode*)malloc(sizeof(AVLNode));
+        AVLNode* newNode =
+            (AVLNode*)malloc(sizeof(AVLNode));
 
         if (!newNode) {
             fprintf(stderr, "Memory allocation failed.\n");
@@ -261,15 +284,17 @@ AVLNode* avlInsert(AVLNode* node, int value, Stats* s, int depth,
     s->comparisons++;
 
     if (value < node->key) {
-        node->left = avlInsert(node->left, value, s,
-                               depth + 1, nodeCount);
+        node->left = avlInsert(
+            node->left, value, s, depth + 1, nodeCount
+        );
     }
     else {
         s->comparisons++;
 
         if (value > node->key) {
-            node->right = avlInsert(node->right, value, s,
-                                    depth + 1, nodeCount);
+            node->right = avlInsert(
+                node->right, value, s, depth + 1, nodeCount
+            );
         }
         else {
             node->count++;
@@ -281,7 +306,7 @@ AVLNode* avlInsert(AVLNode* node, int value, Stats* s, int depth,
     return rebalance(node);
 }
 
-/* 가장 작은 노드를 분리 */
+/* 가장 작은 노드 분리 */
 AVLNode* detachMin(AVLNode* node, AVLNode** minNode) {
     if (!node->left) {
         *minNode = node;
@@ -294,23 +319,26 @@ AVLNode* detachMin(AVLNode* node, AVLNode** minNode) {
 }
 
 /* AVL 삭제 */
-AVLNode* avlDelete(AVLNode* node, int value, Stats* s,
-                   int* nodeCount, int* deleted) {
+AVLNode* avlDelete(AVLNode* node, int value,
+                   Stats* s, int* nodeCount, int* deleted) {
+
     if (!node)
         return NULL;
 
     s->comparisons++;
 
     if (value < node->key) {
-        node->left = avlDelete(node->left, value, s,
-                               nodeCount, deleted);
+        node->left = avlDelete(
+            node->left, value, s, nodeCount, deleted
+        );
     }
     else {
         s->comparisons++;
 
         if (value > node->key) {
-            node->right = avlDelete(node->right, value, s,
-                                    nodeCount, deleted);
+            node->right = avlDelete(
+                node->right, value, s, nodeCount, deleted
+            );
         }
         else {
             *deleted = 1;
@@ -331,6 +359,7 @@ AVLNode* avlDelete(AVLNode* node, int value, Stats* s,
                 return left;
 
             AVLNode* successor = NULL;
+
             right = detachMin(right, &successor);
 
             successor->left = left;
@@ -363,43 +392,23 @@ void freeAVL(AVLNode* node) {
 
     freeAVL(node->left);
     freeAVL(node->right);
+
     free(node);
 }
 
-/* 배열과 AVL 결과 비교 */
-int verify(AVLNode* root, int a[], int n) {
-    int* temp = (int*)malloc((size_t)n * sizeof(int));
+/* 퀵 정렬 방식 전체 실행 */
+Result runQuick(int original[], int n,
+                Operation ops[], int opCount,
+                int output[]) {
 
-    if (!temp)
-        return 0;
-
-    int index = 0;
-    inorder(root, temp, &index);
-
-    int valid = (index == n);
-
-    for (int i = 0; valid && i < n; i++) {
-        if (a[i] != temp[i])
-            valid = 0;
-    }
-
-    free(temp);
-    return valid;
-}
-
-/* 원본 데이터 복사 */
-void copyData(int source[], int dest[], int n) {
-    memcpy(dest, source, (size_t)n * sizeof(int));
-}
-
-/* 퀵 정렬 + 삽입 및 삭제 */
-Result runQuick(int original[], int n, Operation ops[], int opCount) {
     Result result = {0};
     Stats stats = {0};
 
     int capacity = n + opCount;
 
-    int* a = (int*)malloc((size_t)capacity * sizeof(int));
+    int* a = (int*)malloc(
+        (size_t)capacity * sizeof(int)
+    );
 
     if (!a) {
         fprintf(stderr, "Memory allocation failed.\n");
@@ -428,17 +437,22 @@ Result runQuick(int original[], int n, Operation ops[], int opCount) {
     result.movements = stats.movements;
     result.count = current;
 
-    /* 배열 공간 + 퀵 정렬 재귀 스택 추정치 */
-    result.memory = (size_t)capacity * sizeof(int)
-                  + (size_t)stats.maxDepth * 32;
+    result.memory =
+        (size_t)capacity * sizeof(int) +
+        (size_t)stats.maxDepth * 32;
+
+    copyData(a, output, current);
 
     free(a);
 
     return result;
 }
 
-/* AVL 트리 정렬 + 삽입 및 삭제 */
-Result runAVL(int original[], int n, Operation ops[], int opCount) {
+/* AVL 방식 전체 실행 */
+Result runAVL(int original[], int n,
+              Operation ops[], int opCount,
+              int output[]) {
+
     Result result = {0};
     Stats stats = {0};
 
@@ -447,23 +461,33 @@ Result runAVL(int original[], int n, Operation ops[], int opCount) {
 
     double start = getTime();
 
+    /* 초기 데이터 삽입 */
     for (int i = 0; i < n; i++) {
-        root = avlInsert(root, original[i], &stats, 1, &nodeCount);
+        root = avlInsert(
+            root, original[i], &stats, 1, &nodeCount
+        );
     }
 
     int current = n;
 
+    /* 삽입 및 삭제 */
     for (int i = 0; i < opCount; i++) {
+
         if (ops[i].insert) {
-            root = avlInsert(root, ops[i].value, &stats, 1,
-                             &nodeCount);
+            root = avlInsert(
+                root, ops[i].value, &stats,
+                1, &nodeCount
+            );
+
             current++;
         }
         else {
             int deleted = 0;
 
-            root = avlDelete(root, ops[i].value, &stats,
-                             &nodeCount, &deleted);
+            root = avlDelete(
+                root, ops[i].value, &stats,
+                &nodeCount, &deleted
+            );
 
             if (deleted)
                 current--;
@@ -477,17 +501,43 @@ Result runAVL(int original[], int n, Operation ops[], int opCount) {
     result.movements = stats.movements;
     result.count = current;
 
-    /* 실제 노드 공간 + AVL 재귀 스택 추정치 */
-    result.memory = (size_t)nodeCount * sizeof(AVLNode)
-                  + (size_t)stats.maxDepth * 32;
+    result.memory =
+        (size_t)nodeCount * sizeof(AVLNode) +
+        (size_t)stats.maxDepth * 32;
+
+    /* 최종 데이터 저장 */
+    int index = 0;
+    inorder(root, output, &index);
 
     freeAVL(root);
 
     return result;
 }
 
+/* 최종 데이터 검증 */
+int verifyData(int a[], int b[], int n) {
+
+    for (int i = 0; i < n; i++) {
+        if (a[i] != b[i])
+            return 0;
+    }
+
+    return 1;
+}
+
+/* 오름차순 검사 */
+int isSorted(int a[], int n) {
+    for (int i = 1; i < n; i++) {
+        if (a[i - 1] > a[i])
+            return 0;
+    }
+
+    return 1;
+}
+
 /* 메인 함수 */
 int main(void) {
+
     srand((unsigned int)time(NULL));
 
     printf("Quick Sort vs AVL Tree Sort\n");
@@ -495,17 +545,35 @@ int main(void) {
     printf("========================================\n");
 
     for (int k = 0; k < SIZE_COUNT; k++) {
+
         int n = sizes[k];
         int opCount = n / 5;
+        int capacity = n + opCount;
 
-        int* original = (int*)malloc((size_t)n * sizeof(int));
+        int* original = (int*)malloc(
+            (size_t)n * sizeof(int)
+        );
+
+        int* quickData = (int*)malloc(
+            (size_t)capacity * sizeof(int)
+        );
+
+        int* avlData = (int*)malloc(
+            (size_t)capacity * sizeof(int)
+        );
+
         Operation* ops = (Operation*)malloc(
-            (size_t)opCount * sizeof(Operation));
+            (size_t)opCount * sizeof(Operation)
+        );
 
-        if (!original || !ops) {
-            fprintf(stderr, "Memory allocation failed.\n");
+        if (!original || !quickData || !avlData || !ops) {
+            printf("Memory allocation failed.\n");
+
             free(original);
+            free(quickData);
+            free(avlData);
             free(ops);
+
             return 1;
         }
 
@@ -513,103 +581,89 @@ int main(void) {
         for (int i = 0; i < n; i++)
             original[i] = rand() % 100001;
 
-        /* 동일한 연산 순서와 값 생성 */
+        /* 공통 연산 생성 */
         for (int i = 0; i < opCount; i++) {
+
             int choice = rand();
 
             ops[i].insert = (choice % 2 == 0);
+
+            /* 삽입 및 삭제에 사용할 별도 난수 */
             ops[i].value = rand() % 100001;
         }
 
-        Result quick = runQuick(original, n, ops, opCount);
-        Result avl = runAVL(original, n, ops, opCount);
+        /* 두 방법 실행 */
+        Result quick = runQuick(
+            original, n, ops, opCount, quickData
+        );
 
-        /* 최종 결과 검증 */
-        int capacity = n + opCount;
-        int* check = (int*)malloc((size_t)capacity * sizeof(int));
+        Result avl = runAVL(
+            original, n, ops, opCount, avlData
+        );
 
-        if (!check) {
-            fprintf(stderr, "Memory allocation failed.\n");
-            free(original);
-            free(ops);
-            return 1;
+        /* 최종 데이터 비교 */
+        int valid = 1;
+
+        if (quick.count != avl.count)
+            valid = 0;
+
+        if (valid) {
+            valid = verifyData(
+                quickData, avlData, quick.count
+            );
         }
 
-        copyData(original, check, n);
+        /* 정렬 상태 검사 */
+        int quickSorted = isSorted(quickData, quick.count);
+        int avlSorted = isSorted(avlData, avl.count);
 
-        for (int i = 0; i < opCount; i++) {
-            if (ops[i].insert)
-                arrayInsert(check, &n, ops[i].value,
-                            &(Stats){0});
-            else
-                arrayDelete(check, &n, ops[i].value,
-                            &(Stats){0});
-        }
+        if (!quickSorted || !avlSorted)
+            valid = 0;
 
-        int valid = (n == quick.count && n == avl.count);
+        printf("\nData Size : %d    Operations: %d\n",
+               n, opCount);
 
-        /* AVL 결과를 별도로 재구성하여 비교 */
-        AVLNode* verifyRoot = NULL;
-        Stats verifyStats = {0};
-        int verifyNodeCount = 0;
-
-        /* 동일 원본 및 연산 재실행 */
-        int originalSize = sizes[k];
-
-        for (int i = 0; i < originalSize; i++) {
-            verifyRoot = avlInsert(verifyRoot, original[i],
-                                   &verifyStats, 1, &verifyNodeCount);
-        }
-
-        int verifyCount = originalSize;
-
-        for (int i = 0; i < opCount; i++) {
-            if (ops[i].insert) {
-                verifyRoot = avlInsert(verifyRoot, ops[i].value,
-                                       &verifyStats, 1,
-                                       &verifyNodeCount);
-                verifyCount++;
-            }
-            else {
-                int deleted = 0;
-                verifyRoot = avlDelete(verifyRoot, ops[i].value,
-                                       &verifyStats, &verifyNodeCount,
-                                       &deleted);
-                if (deleted)
-                    verifyCount--;
-            }
-        }
-
-        valid = valid && verifyCount == n
-              && verify(verifyRoot, check, n);
-
-        printf("\nData Size : %d    Operations: %d\n", originalSize,
-               opCount);
         printf("------------------------------------------------------\n");
-        printf("%-20s %-18s %-18s\n", "", "Quick Sort", "AVL Tree");
+
+        printf("%-20s %-18s %-18s\n",
+               "", "Quick Sort", "AVL Tree");
+
         printf("------------------------------------------------------\n");
 
         printf("%-20s %-18.3f %-18.3f\n",
-               "Total Time (ms)", quick.time, avl.time);
+               "Total Time (ms)",
+               quick.time, avl.time);
 
         printf("%-20s %-18lld %-18lld\n",
-               "Comparisons", quick.comparisons, avl.comparisons);
+               "Comparisons",
+               quick.comparisons, avl.comparisons);
 
         printf("%-20s %-18lld %-18lld\n",
-               "Data Movements", quick.movements, avl.movements);
+               "Data Movements",
+               quick.movements, avl.movements);
 
         printf("%-20s %-18zu %-18zu\n",
-               "Memory Usage (B)", quick.memory, avl.memory);
+               "Memory Usage (B)",
+               quick.memory, avl.memory);
 
         printf("%-20s %-18d %-18d\n",
-               "Final Data Count", quick.count, avl.count);
+               "Final Data Count",
+               quick.count, avl.count);
 
         printf("------------------------------------------------------\n");
-        printf("Data Verification: %s\n", valid ? "PASS" : "FAIL");
 
-        freeAVL(verifyRoot);
-        free(check);
+        printf("Quick Sort Sorted: %s\n",
+               quickSorted ? "YES" : "NO");
+
+        printf("AVL Tree Sorted: %s\n",
+               avlSorted ? "YES" : "NO");
+
+        printf("Data Verification: %s\n",
+               valid ? "PASS" : "FAIL");
+
         free(original);
+        free(quickData);
+        free(avlData);
         free(ops);
     }
 
@@ -617,3 +671,4 @@ int main(void) {
 
     return 0;
 }
+
